@@ -230,10 +230,15 @@ endif()
 # Platform-specific library requirements
 # ======================================
 
+find_library(LIBJPEG jpeg)
+add_library(LIBJPEG INTERFACE)
+target_link_libraries(LIBJPEG INTERFACE "${LIBJPEG_LIBRARY}")
+target_include_directories(SDL2 INTERFACE "${LIBJPEG_INCLUDE_DIR}")
+
 if (APPLE)
     # Umbrella framework for everything GUI-related
     find_library(COCOA_LIBRARY Cocoa)
-    set(PLATFORM_LIBRARIES ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY})
+    set(PLATFORM_LIBRARIES ${LIBJPEG} ${COCOA_LIBRARY} ${IOKIT_LIBRARY} ${COREVIDEO_LIBRARY})
 elseif (WIN32)
     # WSAPoll and SHGetKnownFolderPath (AppData/Roaming) didn't exist before WinNT 6.x (Vista)
     add_definitions(-D_WIN32_WINNT=0x0600 -DWINVER=0x0600)

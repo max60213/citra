@@ -195,6 +195,15 @@ struct DirectionState {
     bool right;
 };
 
+typedef struct {
+  uint16_t pressedButtons;
+  int16_t cPadX;
+  int16_t cPadY;
+  uint16_t touchX;
+  uint16_t touchY;
+} CTroll3DInfo;
+
+
 /// Translates analog stick axes to directions. This is exposed for ir_rst module to use.
 DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y);
 
@@ -300,6 +309,9 @@ public:
     const PadState& GetState() const;
 
 private:
+    int CreateSocket(unsigned short port, char *addr);
+    void CheckCTroll3D(CTroll3DInfo *info);
+
     void LoadInputDevices();
     void UpdatePadCallback(u64 userdata, s64 cycles_late);
     void UpdateAccelerometerCallback(u64 userdata, s64 cycles_late);

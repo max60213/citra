@@ -426,6 +426,16 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
         layout);
 }
 
+void GRenderWindow::ConnectCTroll3D(const QString& address) {
+  const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(320, 240)};
+  screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB32);
+
+  VideoCore::RequestCTroll3D(
+      screen_image.bits(),
+      address.toStdString().c_str(),
+      layout);
+}
+
 void GRenderWindow::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {
     setMinimumSize(minimal_size.first, minimal_size.second);
 }

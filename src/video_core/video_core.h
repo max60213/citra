@@ -44,6 +44,10 @@ extern void* g_screenshot_bits;
 extern std::function<void()> g_screenshot_complete_callback;
 extern Layout::FramebufferLayout g_screenshot_framebuffer_layout;
 
+extern void* g_ctroll3d_bits;
+extern Layout::FramebufferLayout g_ctroll3d_framebuffer_layout;
+extern char *g_ctroll3d_addr;
+
 extern Memory::MemorySystem* g_memory;
 
 enum class ResultStatus {
@@ -61,6 +65,10 @@ void Shutdown();
 /// Request a screenshot of the next frame
 void RequestScreenshot(void* data, std::function<void()> callback,
                        const Layout::FramebufferLayout& layout);
+
+// Request connection to CTroll3D
+void RequestCTroll3D(void* data, const char *address,
+                      const Layout::FramebufferLayout& layout);
 
 u16 GetResolutionScaleFactor();
 

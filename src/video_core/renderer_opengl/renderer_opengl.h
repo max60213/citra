@@ -87,11 +87,13 @@ private:
     void ReloadShader();
     void PrepareRendertarget();
     void RenderScreenshot();
+    void RenderCTroll3D();
     void RenderToMailbox(const Layout::FramebufferLayout& layout,
                          std::unique_ptr<Frontend::TextureMailbox>& mailbox, bool flipped);
     void ConfigureFramebufferTexture(TextureInfo& texture,
                                      const GPU::Regs::FramebufferConfig& framebuffer);
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
+    void DrawOnlyBottomScreen(const Layout::FramebufferLayout& layout, bool flipped);
     void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
@@ -114,6 +116,7 @@ private:
     OGLBuffer vertex_buffer;
     OGLProgram shader;
     OGLFramebuffer screenshot_framebuffer;
+    OGLFramebuffer screen_framebuffer;
     OGLSampler filter_sampler;
 
     /// Display information for top and bottom screens respectively

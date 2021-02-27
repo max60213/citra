@@ -210,6 +210,7 @@ private slots:
     void OnPlayMovie();
     void OnStopRecordingPlayback();
     void OnCaptureScreenshot();
+    void OnConnectCTroll3D();
 #ifdef ENABLE_FFMPEG_VIDEO_DUMPER
     void OnStartVideoDumping();
     void OnStopVideoDumping();

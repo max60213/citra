@@ -761,6 +761,8 @@ void GMainWindow::ConnectMenuEvents() {
     });
     connect(ui->action_Capture_Screenshot, &QAction::triggered, this,
             &GMainWindow::OnCaptureScreenshot);
+    connect(ui->action_Connect_CTroll3D, &QAction::triggered, this,
+            &GMainWindow::OnConnectCTroll3D);
 
 #ifdef ENABLE_FFMPEG_VIDEO_DUMPER
     connect(ui->action_Dump_Video, &QAction::triggered, [this] {
@@ -1557,6 +1559,7 @@ void GMainWindow::OnStartGame() {
     ui->action_Report_Compatibility->setEnabled(true);
     ui->action_Enable_Frame_Advancing->setEnabled(true);
     ui->action_Capture_Screenshot->setEnabled(true);
+    ui->action_Connect_CTroll3D->setEnabled(true);
 
     discord_rpc->Update();
 
@@ -1992,6 +1995,17 @@ void GMainWindow::OnCaptureScreenshot() {
             render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);
         }
     }
+    OnStartGame();
+}
+
+void GMainWindow::OnConnectCTroll3D() {
+    OnPauseGame();
+    bool ok;
+    QString text = QInputDialog::getText(this, tr("3DS Address"),
+                                         tr("IP:"), QLineEdit::Normal,
+                                         tr("192.168.x.x"), &ok);
+
+    render_window->ConnectCTroll3D(text);
     OnStartGame();
 }
 

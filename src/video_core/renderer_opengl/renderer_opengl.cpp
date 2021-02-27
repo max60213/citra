@@ -380,6 +380,8 @@ void RendererOpenGL::SwapBuffers() {
 
     RenderScreenshot();
 
+    RenderCTroll3D();
+
     const auto& layout = render_window.GetFramebufferLayout();
     RenderToMailbox(layout, render_window.mailbox, false);
 
@@ -407,6 +409,115 @@ void RendererOpenGL::SwapBuffers() {
     if (Pica::g_debug_context && Pica::g_debug_context->recorder) {
         Pica::g_debug_context->recorder->FrameFinished();
     }
+}
+
+#include "/usr/local/include/jpeglib.h"
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+#include <fcntl.h>
+
+#define PORT 6543
+
+int createSocket(unsigned short port, char *addr) {
+  int sock;
+  struct sockaddr_in serv_addr;
+
+  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+    return -1;
+  }
+
+  serv_addr.sin_family = AF_INET;
+  serv_addr.sin_port = htons(port);
+  inet_pton(AF_INET, addr, &serv_addr.sin_addr);
+
+  if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    return -1;
+  }
+
+  return sock;
+}
+
+int readConfirmation(int socket) {
+  unsigned char b;
+  return recv(socket, &b, 1, 0) == 1;
+}
+
+int sendLayoutImage(const Layout::FramebufferLayout& layout, int getConfirmation) {
+  static unsigned char* outBuf = 0;
+  static unsigned long outSize = 0;
+  static int socket = -1;
+  static int sent = 0;
+
+  if (socket == -1) {
+    socket = createSocket(PORT, VideoCore::g_ctroll3d_addr);
+    if (socket != -1) {
+      fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
+    }
+  }
+
+  if (sent == 2) {
+    int confirmed = readConfirmation(socket);
+    if (confirmed) {
+      sent = 0;
+      if (getConfirmation) return 0;
+    } else {
+      return 1;
+    }
+  }
+
+  const auto& bottom_screen = layout.bottom_screen;
+  int width = layout.width;
+  int height = layout.height;
+
+  unsigned char *inputBuf = (unsigned char *) VideoCore::g_ctroll3d_bits;
+  glReadPixels(bottom_screen.left, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE,
+               inputBuf);
+
+  struct jpeg_compress_struct cinfo;
+  struct jpeg_error_mgr jerr;
+
+  cinfo.err = jpeg_std_error(&jerr);
+  jpeg_create_compress(&cinfo);
+
+  jpeg_mem_dest(&cinfo, &outBuf, &outSize);
+
+  cinfo.image_width = width;
+  cinfo.image_height = height;
+  cinfo.input_components = 3;
+  cinfo.in_color_space = JCS_RGB;
+
+  jpeg_set_defaults(&cinfo);
+//  jpeg_set_quality(&cinfo, 80, TRUE);
+  jpeg_set_quality(&cinfo, 40, TRUE);
+
+  jpeg_start_compress(&cinfo, TRUE);
+
+  int row_stride = width * 3;
+  JSAMPROW row_pointer[1];
+  while (cinfo.next_scanline < cinfo.image_height) {
+    // row_pointer[0] = &inputBuf[(height - cinfo.next_scanline - 1) * row_stride];
+    row_pointer[0] = &inputBuf[cinfo.next_scanline * row_stride];
+    (void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
+  }
+
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+
+  if (socket != -1) {
+    send(socket, &outSize, sizeof(outSize), 0);
+    send(socket, outBuf, outSize , 0);
+    ++sent;
+
+    if (sent == 2) {
+      int confirmed = readConfirmation(socket);
+      if (confirmed) sent = 0;
+      else return 1;
+    }
+  }
+
+  return 0;
 }
 
 void RendererOpenGL::RenderScreenshot() {
@@ -440,6 +551,50 @@ void RendererOpenGL::RenderScreenshot() {
 
         VideoCore::g_screenshot_complete_callback();
         VideoCore::g_renderer_screenshot_requested = false;
+    }
+}
+
+void RendererOpenGL::RenderCTroll3D() {
+    static int waitingConfirmation = 0;
+    static int skip = 1;
+
+    if (waitingConfirmation) {
+      Layout::FramebufferLayout layout;
+      waitingConfirmation = sendLayoutImage(layout, 1);
+      if (waitingConfirmation) return;
+    }
+
+    if(skip) --skip;
+    if (VideoCore::g_ctroll3d_addr && !skip) {
+        skip = 1; //5;
+        screen_framebuffer.Create();
+        GLuint old_read_fb = state.draw.read_framebuffer;
+        GLuint old_draw_fb = state.draw.draw_framebuffer;
+        state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
+        state.Apply();
+
+        Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
+
+        GLuint renderbuffer;
+        glGenRenderbuffers(1, &renderbuffer);
+        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                  renderbuffer);
+
+        layout.top_screen_enabled = false;
+        layout.bottom_screen.top = layout.top_screen.top = 0;
+        layout.bottom_screen.left = layout.top_screen.left = 0;
+        layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
+        layout.bottom_screen.right = layout.top_screen.right = layout.width;
+        DrawOnlyBottomScreen(layout, true);
+        waitingConfirmation = sendLayoutImage(layout, 0);
+
+        screen_framebuffer.Release();
+        state.draw.read_framebuffer = old_read_fb;
+        state.draw.draw_framebuffer = old_draw_fb;
+        state.Apply();
+        glDeleteRenderbuffers(1, &renderbuffer);
     }
 }
 
@@ -524,9 +679,11 @@ void RendererOpenGL::RenderToMailbox(const Layout::FramebufferLayout& layout,
         state.draw.draw_framebuffer = frame->render.handle;
         state.Apply();
         DrawScreens(layout, flipped);
+
         // Create a fence for the frontend to wait on and swap this frame to OffTex
         frame->render_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
+
         mailbox->ReleaseRenderFrame(frame);
     }
 }
@@ -1077,6 +1234,49 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             }
         }
     }
+}
+
+/**
+ * Draws the emulated screens to the emulator window.
+ */
+void RendererOpenGL::DrawOnlyBottomScreen(const Layout::FramebufferLayout& layout, bool flipped) {
+    if (VideoCore::g_renderer_bg_color_update_requested.exchange(false)) {
+        // Update background color before drawing
+        glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
+                     0.0f);
+    }
+
+    if (VideoCore::g_renderer_sampler_update_requested.exchange(false)) {
+        // Set the new filtering mode for the sampler
+        ReloadSampler();
+    }
+
+    if (VideoCore::g_renderer_shader_update_requested.exchange(false)) {
+        // Update fragment shader before drawing
+        shader.Release();
+        // Link shaders and get variable locations
+        ReloadShader();
+    }
+
+    const auto& top_screen = layout.top_screen;
+    const auto& bottom_screen = layout.bottom_screen;
+
+    glViewport(0, 0, layout.width, layout.height);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Set projection matrix
+    std::array<GLfloat, 3 * 2> ortho_matrix =
+        MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
+    glUniformMatrix3x2fv(uniform_modelview_matrix, 1, GL_FALSE, ortho_matrix.data());
+
+    // Bind texture in Texture Unit 0
+    glUniform1i(uniform_color_texture, 0);
+
+    glUniform1i(uniform_layer, 0);
+
+    DrawSingleScreenRotated(screen_infos[2], (float)bottom_screen.left,
+                            (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
+                            (float)bottom_screen.GetHeight());
 }
 
 void RendererOpenGL::TryPresent(int timeout_ms) {
