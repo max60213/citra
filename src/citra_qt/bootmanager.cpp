@@ -426,14 +426,184 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
         layout);
 }
 
-void GRenderWindow::ConnectCTroll3D(const QString& address) {
-  const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(320, 240)};
-  screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB32);
 
-  VideoCore::RequestCTroll3D(
-      screen_image.bits(),
-      address.toStdString().c_str(),
-      layout);
+#define PORT 6543
+
+//#define USE_QTSOCKETS
+//#define USE_JPEGLIB
+
+#ifdef USE_QTSOCKETS
+#include <QTcpSocket>
+#include <QAbstractSocket>
+
+int readConfirmation(QTcpSocket& sock) {
+    sock.waitForReadyRead(1);
+    if (sock.bytesAvailable() > 0) {
+        sock.readAll();
+        return 1;
+    }
+
+    return 0;
+}
+#else
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+#include <fcntl.h>
+
+int createSocket(unsigned short port, char *addr) {
+    int sock;
+    struct sockaddr_in serv_addr;
+
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        return -1;
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+    inet_pton(AF_INET, addr, &serv_addr.sin_addr);
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        return -1;
+    }
+
+    return sock;
+}
+
+int readConfirmation(int sock) {
+    unsigned char b;
+    return recv(sock, &b, 1, 0) == 1;
+}
+#endif
+
+#ifdef USE_JPEGLIB
+#include "/usr/local/include/jpeglib.h"
+#else
+#include <QBuffer>
+#endif
+
+int sendCTroll3DScreen(const Layout::FramebufferLayout& layout, int getConfirmation) {
+    static unsigned char* outBuf = 0;
+    static unsigned long outSize = 0;
+    static int sent = 0;
+
+#ifdef USE_QTSOCKETS
+    static QTcpSocket sock;
+    static unsigned int waitConnection = 0;
+
+    if (sock.state() != QAbstractSocket::ConnectedState) {
+        if (!waitConnection) {
+            waitConnection = 600;
+            sock.connectToHost(address, PORT);
+            sock.waitForConnected(1000);
+        }
+        else waitConnection--;
+    }
+#else
+    static int sock = -1;
+
+    if (sock == -1) {
+        sock = createSocket(PORT, VideoCore::g_ctroll3d_addr);
+        if (sock != -1) {
+            fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+        }
+    }
+#endif
+
+    if (sent == 2) {
+        int confirmed = readConfirmation(sock);
+        if (confirmed) {
+            sent = 0;
+            if (getConfirmation) return 0;
+        } else {
+            return 1;
+        }
+    }
+
+    const auto& bottom_screen = layout.bottom_screen;
+    int width = layout.width;
+    int height = layout.height;
+
+#ifdef USE_JPEGLIB
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    jpeg_mem_dest(&cinfo, &outBuf, &outSize);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    //  jpeg_set_quality(&cinfo, 80, TRUE);
+    jpeg_set_quality(&cinfo, 40, TRUE);
+
+    jpeg_start_compress(&cinfo, TRUE);
+
+    unsigned char *inputBuf = (unsigned char *) VideoCore::g_ctroll3d_bits;
+    int row_stride = width * 3;
+    JSAMPROW row_pointer[1];
+    while (cinfo.next_scanline < cinfo.image_height) {
+        row_pointer[0] = &inputBuf[cinfo.next_scanline * row_stride];
+        (void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+#else
+    QImage img = QImage((uchar *)VideoCore::g_ctroll3d_bits, width, height, QImage::Format_RGB888);
+    QByteArray ba;
+    QBuffer buffer(&ba);
+    buffer.open(QIODevice::WriteOnly);
+    img.save(&buffer, "JPG", 40);
+    buffer.close();
+
+    outSize = ba.size();
+    outBuf = (unsigned char *)ba.constData();
+#endif
+
+printf("SENDING %d\n", outSize);
+#ifdef USE_QTSOCKETS
+    if (sock.state() == QAbstractSocket::ConnectedState) {
+        sock.write((const char *)&outSize, sizeof(outSize));
+        sock.waitForBytesWritten();
+        sock.write((const char *)outBuf, outSize);
+        sock.waitForBytesWritten();
+        ++sent;
+    }
+#else
+    if (sock != -1) {
+        send(sock, &outSize, sizeof(outSize), 0);
+        send(sock, outBuf, outSize , 0);
+        ++sent;
+    }
+#endif
+
+    if (sent == 2) {
+        int confirmed = readConfirmation(sock);
+        if (confirmed) sent = 0;
+        else return 1;
+    }
+
+    return 0;
+}
+
+void GRenderWindow::ConnectCTroll3D(const QString& address) {
+    const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(320, 240)};
+    screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB32);
+
+    VideoCore::RequestCTroll3D(
+        screen_image.bits(),
+        [=](int getConfirmation)->int {
+            return sendCTroll3DScreen(layout, getConfirmation);
+        },
+        address.toStdString().c_str(),
+        layout
+    );
 }
 
 void GRenderWindow::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {

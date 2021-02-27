@@ -411,115 +411,6 @@ void RendererOpenGL::SwapBuffers() {
     }
 }
 
-#include "/usr/local/include/jpeglib.h"
-
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/time.h>
-#include <fcntl.h>
-
-#define PORT 6543
-
-int createSocket(unsigned short port, char *addr) {
-  int sock;
-  struct sockaddr_in serv_addr;
-
-  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    return -1;
-  }
-
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(port);
-  inet_pton(AF_INET, addr, &serv_addr.sin_addr);
-
-  if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    return -1;
-  }
-
-  return sock;
-}
-
-int readConfirmation(int socket) {
-  unsigned char b;
-  return recv(socket, &b, 1, 0) == 1;
-}
-
-int sendLayoutImage(const Layout::FramebufferLayout& layout, int getConfirmation) {
-  static unsigned char* outBuf = 0;
-  static unsigned long outSize = 0;
-  static int socket = -1;
-  static int sent = 0;
-
-  if (socket == -1) {
-    socket = createSocket(PORT, VideoCore::g_ctroll3d_addr);
-    if (socket != -1) {
-      fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
-    }
-  }
-
-  if (sent == 2) {
-    int confirmed = readConfirmation(socket);
-    if (confirmed) {
-      sent = 0;
-      if (getConfirmation) return 0;
-    } else {
-      return 1;
-    }
-  }
-
-  const auto& bottom_screen = layout.bottom_screen;
-  int width = layout.width;
-  int height = layout.height;
-
-  unsigned char *inputBuf = (unsigned char *) VideoCore::g_ctroll3d_bits;
-  glReadPixels(bottom_screen.left, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE,
-               inputBuf);
-
-  struct jpeg_compress_struct cinfo;
-  struct jpeg_error_mgr jerr;
-
-  cinfo.err = jpeg_std_error(&jerr);
-  jpeg_create_compress(&cinfo);
-
-  jpeg_mem_dest(&cinfo, &outBuf, &outSize);
-
-  cinfo.image_width = width;
-  cinfo.image_height = height;
-  cinfo.input_components = 3;
-  cinfo.in_color_space = JCS_RGB;
-
-  jpeg_set_defaults(&cinfo);
-//  jpeg_set_quality(&cinfo, 80, TRUE);
-  jpeg_set_quality(&cinfo, 40, TRUE);
-
-  jpeg_start_compress(&cinfo, TRUE);
-
-  int row_stride = width * 3;
-  JSAMPROW row_pointer[1];
-  while (cinfo.next_scanline < cinfo.image_height) {
-    // row_pointer[0] = &inputBuf[(height - cinfo.next_scanline - 1) * row_stride];
-    row_pointer[0] = &inputBuf[cinfo.next_scanline * row_stride];
-    (void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
-  }
-
-  jpeg_finish_compress(&cinfo);
-  jpeg_destroy_compress(&cinfo);
-
-  if (socket != -1) {
-    send(socket, &outSize, sizeof(outSize), 0);
-    send(socket, outBuf, outSize , 0);
-    ++sent;
-
-    if (sent == 2) {
-      int confirmed = readConfirmation(socket);
-      if (confirmed) sent = 0;
-      else return 1;
-    }
-  }
-
-  return 0;
-}
-
 void RendererOpenGL::RenderScreenshot() {
     if (VideoCore::g_renderer_screenshot_requested) {
         // Draw this frame to the screenshot framebuffer
@@ -560,7 +451,7 @@ void RendererOpenGL::RenderCTroll3D() {
 
     if (waitingConfirmation) {
       Layout::FramebufferLayout layout;
-      waitingConfirmation = sendLayoutImage(layout, 1);
+      waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
       if (waitingConfirmation) return;
     }
 
@@ -588,7 +479,9 @@ void RendererOpenGL::RenderCTroll3D() {
         layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
         layout.bottom_screen.right = layout.top_screen.right = layout.width;
         DrawOnlyBottomScreen(layout, true);
-        waitingConfirmation = sendLayoutImage(layout, 0);
+        glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
+                     VideoCore::g_ctroll3d_bits);
+        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
 
         screen_framebuffer.Release();
         state.draw.read_framebuffer = old_read_fb;
