@@ -448,6 +448,14 @@ void RendererOpenGL::RenderScreenshot() {
 void RendererOpenGL::RenderCTroll3D() {
     static int waitingConfirmation = 0;
     static int skip = 1;
+    static int inited = 0;
+    static GLuint renderbuffer;
+
+    if (!inited) {
+        inited = 1;
+        screen_framebuffer.Create();
+        glGenRenderbuffers(1, &renderbuffer);
+    }
 
     if (waitingConfirmation) {
       Layout::FramebufferLayout layout;
@@ -458,7 +466,6 @@ void RendererOpenGL::RenderCTroll3D() {
     if(skip) --skip;
     if (VideoCore::g_ctroll3d_addr && !skip) {
         skip = 1; //5;
-        screen_framebuffer.Create();
         GLuint old_read_fb = state.draw.read_framebuffer;
         GLuint old_draw_fb = state.draw.draw_framebuffer;
         state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
@@ -466,8 +473,6 @@ void RendererOpenGL::RenderCTroll3D() {
 
         Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
 
-        GLuint renderbuffer;
-        glGenRenderbuffers(1, &renderbuffer);
         glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
@@ -483,11 +488,9 @@ void RendererOpenGL::RenderCTroll3D() {
                      VideoCore::g_ctroll3d_bits);
         waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
 
-        screen_framebuffer.Release();
         state.draw.read_framebuffer = old_read_fb;
         state.draw.draw_framebuffer = old_draw_fb;
         state.Apply();
-        glDeleteRenderbuffers(1, &renderbuffer);
     }
 }
 
