@@ -430,7 +430,7 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
 #define PORT 6543
 
 //#define USE_QTSOCKETS
-//#define USE_JPEGLIB
+#define USE_JPEGLIB
 
 #ifdef USE_QTSOCKETS
 #include <QTcpSocket>
@@ -566,7 +566,6 @@ int sendCTroll3DScreen(const Layout::FramebufferLayout& layout, int getConfirmat
     outBuf = (unsigned char *)ba.constData();
 #endif
 
-printf("SENDING %d\n", outSize);
 #ifdef USE_QTSOCKETS
     if (sock.state() == QAbstractSocket::ConnectedState) {
         sock.write((const char *)&outSize, sizeof(outSize));
