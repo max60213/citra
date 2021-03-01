@@ -450,6 +450,59 @@ void RendererOpenGL::RenderScreenshot() {
     }
 }
 
+#define PBO_SZ 3
+
+#if PBO_SZ >= 2
+GLuint pbo[PBO_SZ];
+GLuint mCurrentPboIndex = 0;
+GLuint mNextPboIndex = 1;
+int mSkipFirstFrame = 0;
+
+void initPBO() {
+    static int init = 1;
+
+    if (init) {
+        glGenBuffers(PBO_SZ, pbo);
+        for (int i = 0; i < PBO_SZ; i++) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[i]);
+            glBufferData(GL_PIXEL_PACK_BUFFER, 240 * 320 * 3, 0, GL_STATIC_READ);
+        }
+        init = 0;
+    }
+}
+
+int firstFrame = 1;
+char *readPixelsFromPBO()
+{
+    char *data = 0;
+    if (!firstFrame) {
+        // Bind the current buffer
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mCurrentPboIndex]);
+
+        // Read pixels into the bound buffer
+        glReadPixels(0, 0, 240, 320, GL_RGB, GL_UNSIGNED_BYTE, 0);
+
+        // Map to buffer to a byte buffer, this is our pixel data
+        data = (char *) glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 240 * 320 * 3, GL_MAP_READ_BIT);
+    }
+    firstFrame = 0;
+
+    // Bind the next buffer
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mNextPboIndex]);
+
+    mCurrentPboIndex = (mCurrentPboIndex + 1) % PBO_SZ;
+    mNextPboIndex = (mNextPboIndex + 1) % PBO_SZ;
+
+    return data;
+}
+
+void unbindPBO() {
+    // Unmap the buffers
+    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, GL_NONE);
+}
+#endif
+
 void RendererOpenGL::RenderCTroll3D() {
     static int waitingConfirmation = 0;
     static int skip = 1;
@@ -470,7 +523,7 @@ void RendererOpenGL::RenderCTroll3D() {
 
     if(skip) --skip;
     if (VideoCore::g_ctroll3d_addr && !skip) {
-          skip = 1; //5;
+          skip = 2;
 //          screen_framebuffer.Create();
           GLuint old_read_fb = state.draw.read_framebuffer;
           GLuint old_draw_fb = state.draw.draw_framebuffer;
@@ -485,16 +538,31 @@ void RendererOpenGL::RenderCTroll3D() {
           glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
           glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
                                     renderbuffer);
-
+#if PBO_SZ >= 2
+          initPBO();
+#endif
           layout.top_screen_enabled = false;
           layout.bottom_screen.top = layout.top_screen.top = 0;
           layout.bottom_screen.left = layout.top_screen.left = 0;
           layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
           layout.bottom_screen.right = layout.top_screen.right = layout.width;
+
+#if PBO_SZ >= 2
+          char *data = readPixelsFromPBO();
+          if (data) {
+              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
+          } else {
+              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+          }
+#endif
           DrawCTroll3DBottomScreen(layout);
+#if PBO_SZ >= 2
+          unbindPBO();
+#else
           glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
                        VideoCore::g_ctroll3d_bits);
-          waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
+          waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+#endif
 
 //          screen_framebuffer.Release();
           state.draw.read_framebuffer = old_read_fb;
@@ -1180,9 +1248,9 @@ void RendererOpenGL::DrawCTroll3DBottomScreen(const Layout::FramebufferLayout& l
 
     glUniform1i(uniform_layer, 0);
 
-    DrawSingleScreen/*Rotated*/(screen_infos[2], (float)bottom_screen.left,
-                            (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
-                            (float)bottom_screen.GetHeight());
+    DrawSingleScreen(screen_infos[2], (float)bottom_screen.left,
+                      (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
+                      (float)bottom_screen.GetHeight());
 }
 
 void RendererOpenGL::TryPresent(int timeout_ms) {

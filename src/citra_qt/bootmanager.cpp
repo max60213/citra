@@ -646,7 +646,7 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
     VideoCore::RequestCTroll3D(
         screen_image.bits(),
-        [=](int getConfirmation)->int {
+        [=](char *frameData)->int {
             static DECLJPEGOUTBUF(outBuf);
             static unsigned long outSize = 0;
             static DECLJPEGOUTBUF(outDiffBuf);
@@ -678,18 +678,15 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
             if (sent == 2) {
                 int confirmed = readConfirmation(sock);
-                if (confirmed) {
-                    sent = 0;
-                    if (getConfirmation) return 0;
-                } else {
-                    return 1;
-                }
+                if (confirmed) sent = 0;
+                else return 1;
             }
+            if (!frameData) return 0;
 
             int width = layout.width;
             int height = layout.height;
 
-            int numSq = imageDiff((unsigned char *)VideoCore::g_ctroll3d_bits, width, height);
+            int numSq = imageDiff((unsigned char *)frameData, width, height);
 //            printf("DIFF %d\n", numSq);
 //            if (numSq == 0) return 0;
             if (numSq == 0) {
@@ -697,7 +694,7 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
                 sent += socketSend(sock, (const char *)&dataType, 1);
             } else {
                 char dataType = 1;
-                const char *jpgBuf = jpegCompress((unsigned char *) VideoCore::g_ctroll3d_bits, width, height, 40, &outBuf, &outSize);
+                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40, &outBuf, &outSize);
                 const char *jpgDiffBuf = 0;
 
                 if (numSq > 0) {
