@@ -602,8 +602,8 @@ int putSquare(unsigned char *dst, unsigned char *src, int rowStride) {
 }
 
 unsigned char *lastImage = 0;
-int imageDiff(unsigned char *currentImage, int width, int height) {
-    int numSqDiff = 0;
+int16_t imageDiff(unsigned char *currentImage, int width, int height) {
+    int16_t numSqDiff = 0;
     int rowStride = width * 3;
     int mapPos = 0;
     int mapMask = 0x01;
@@ -652,6 +652,8 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             static DECLJPEGOUTBUF(outDiffBuf);
             static unsigned long outDiffSize = 0;
             static int sent = 0;
+            static int forceFrame = 0;
+            static int lastFrameWasFull = 0;
 
 #ifdef USE_QTSOCKETS
             static QTcpSocket sock;
@@ -686,25 +688,40 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             int width = layout.width;
             int height = layout.height;
 
-            int numSq = imageDiff((unsigned char *)frameData, width, height);
-//            printf("DIFF %d\n", numSq);
-//            if (numSq == 0) return 0;
+
+            int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
+            if (lastFrameWasFull) forceFrame = 0;
+            else if (forceFrame > 60) numSq = -1;
+
             if (numSq == 0) {
                 char dataType = 0;
                 sent += socketSend(sock, (const char *)&dataType, 1);
+                forceFrame+=2;
             } else {
-                char dataType = 1;
-                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40, &outBuf, &outSize);
+                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 50 + (rand()%20), &outBuf, &outSize);
                 const char *jpgDiffBuf = 0;
 
                 if (numSq > 0) {
-                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 40, &outDiffBuf, &outDiffSize);
+                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 60 + (rand()%20), &outDiffBuf, &outDiffSize);
                 }
 
-//                printf("COMP DIFF SZ %d\n", outDiffSize);
-                sent += socketSend(sock, (const char *)&dataType, 1);
-                socketSend(sock, (const char *)&outSize, sizeof(outSize));
-                socketSend(sock, jpgBuf, outSize);
+                if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
+                    char dataType = 2;
+                    sent += socketSend(sock, (const char *)&dataType, 1);
+                    socketSend(sock, (const char *)&outDiffSize, sizeof(outDiffSize));
+                    socketSend(sock, (const char *)diffMap, sizeof(diffMap));
+                    socketSend(sock, jpgDiffBuf, outDiffSize);
+                    forceFrame+=5;
+                    lastFrameWasFull = 0;
+                } else {
+                    char dataType = 1;
+                    sent += socketSend(sock, (const char *)&dataType, 1);
+                    socketSend(sock, (const char *)&outSize, sizeof(outSize));
+                    socketSend(sock, jpgBuf, outSize);
+                    forceFrame = 0;
+                    lastFrameWasFull = 1;
+                }
+
             }
 
             if (sent == 2) {

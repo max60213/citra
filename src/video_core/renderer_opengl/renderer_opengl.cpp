@@ -450,7 +450,7 @@ void RendererOpenGL::RenderScreenshot() {
     }
 }
 
-#define PBO_SZ 3
+#define PBO_SZ 2
 
 #if PBO_SZ >= 2
 GLuint pbo[PBO_SZ];
