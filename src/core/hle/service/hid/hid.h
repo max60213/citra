@@ -201,6 +201,12 @@ typedef struct {
   int16_t cPadY;
   uint16_t touchX;
   uint16_t touchY;
+  uint16_t accelX;
+  uint16_t accelY;
+  uint16_t accelZ;
+  uint16_t gyroX;
+  uint16_t gyroY;
+  uint16_t gyroZ;
 } CTroll3DInfo;
 
 
@@ -360,6 +366,8 @@ private:
     std::unique_ptr<Input::MotionDevice> motion_device;
     std::unique_ptr<Input::TouchDevice> touch_device;
     std::unique_ptr<Input::TouchDevice> touch_btn_device;
+
+    CTroll3DInfo ctroll3d = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);

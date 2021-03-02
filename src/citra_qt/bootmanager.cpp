@@ -429,8 +429,8 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
 
 #define PORT 6543
 
-//#define USE_QTSOCKETS
-#define USE_JPEGLIB
+#define USE_QTSOCKETS
+//#define USE_JPEGLIB
 
 #ifdef USE_QTSOCKETS
 #include <QTcpSocket>
@@ -489,7 +489,11 @@ int socketSend(int sock, const char *data, int sz) {
 
 int readConfirmation(int sock) {
     unsigned char b;
-    return recv(sock, &b, 1, 0) == 1;
+
+    int result = recv(sock, &b, 1, 0) == 1;
+    while (recv(sock, &b, 1, 0) == 1);
+
+    return result;
 }
 #endif
 
@@ -654,6 +658,8 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             static int sent = 0;
             static int forceFrame = 0;
             static int lastFrameWasFull = 0;
+            static int countConfirmation = 2;
+            static unsigned int confirmationDelayed = 0;
 
 #ifdef USE_QTSOCKETS
             static QTcpSocket sock;
@@ -678,10 +684,21 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             }
 #endif
 
-            if (sent == 2) {
+            if (sent == countConfirmation) {
                 int confirmed = readConfirmation(sock);
-                if (confirmed) sent = 0;
-                else return 1;
+                if (confirmed) {
+                    if (confirmationDelayed) {
+                        countConfirmation += confirmationDelayed;
+                        if (countConfirmation > 6) countConfirmation = 6;
+                        confirmationDelayed = 0;
+                    } else if (countConfirmation > 2) {
+                        countConfirmation--;
+                    }
+                    sent = 0;
+                } else {
+                    confirmationDelayed += 2;
+                    return 1;
+                }
             }
             if (!frameData) return 0;
 
@@ -691,43 +708,59 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
             int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
             if (lastFrameWasFull) forceFrame = 0;
-            else if (forceFrame > 60) numSq = -1;
+            else if (forceFrame > 80) numSq = -1;
 
+            char requireConfirmation = (sent == 0);
             if (numSq == 0) {
                 char dataType = 0;
                 sent += socketSend(sock, (const char *)&dataType, 1);
+                socketSend(sock, (const char *)&requireConfirmation, 1);
                 forceFrame+=2;
             } else {
-                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 50 + (rand()%20), &outBuf, &outSize);
+                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
                 const char *jpgDiffBuf = 0;
 
                 if (numSq > 0) {
-                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 60 + (rand()%20), &outDiffBuf, &outDiffSize);
+                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
                 }
 
                 if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
                     char dataType = 2;
+                    uint16_t dataSize = outDiffSize;
                     sent += socketSend(sock, (const char *)&dataType, 1);
-                    socketSend(sock, (const char *)&outDiffSize, sizeof(outDiffSize));
+                    socketSend(sock, (const char *)&requireConfirmation, 1);
+                    socketSend(sock, (const char *)&dataSize, 2);
                     socketSend(sock, (const char *)diffMap, sizeof(diffMap));
-                    socketSend(sock, jpgDiffBuf, outDiffSize);
+                    socketSend(sock, jpgDiffBuf, dataSize);
                     forceFrame+=5;
                     lastFrameWasFull = 0;
                 } else {
                     char dataType = 1;
+                    uint16_t dataSize = outSize;
                     sent += socketSend(sock, (const char *)&dataType, 1);
-                    socketSend(sock, (const char *)&outSize, sizeof(outSize));
-                    socketSend(sock, jpgBuf, outSize);
+                    socketSend(sock, (const char *)&requireConfirmation, 1);
+                    socketSend(sock, (const char *)&dataSize, 2);
+                    socketSend(sock, jpgBuf, dataSize);
                     forceFrame = 0;
                     lastFrameWasFull = 1;
                 }
-
             }
 
-            if (sent == 2) {
+            if (sent == countConfirmation) {
                 int confirmed = readConfirmation(sock);
-                if (confirmed) sent = 0;
-                else return 1;
+                if (confirmed) {
+                    if (confirmationDelayed) {
+                        countConfirmation += confirmationDelayed;
+                        if (countConfirmation > 6) countConfirmation = 6;
+                        confirmationDelayed = 0;
+                    } else if (countConfirmation > 2) {
+                        countConfirmation--;
+                    }
+                    sent = 0;
+                } else {
+                    confirmationDelayed += 2;
+                    return 1;
+                }
             }
 
             return 0;

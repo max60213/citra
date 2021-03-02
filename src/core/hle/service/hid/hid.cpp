@@ -119,7 +119,7 @@ int Module::CreateSocket(unsigned short port, char *addr) {
 }
 
 void Module::CheckCTroll3D(CTroll3DInfo *info) {
-    static CTroll3DInfo buf = {0, 0, 0, 0, 0};
+    static CTroll3DInfo buf = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     static char *ptr = (char *)&buf;
     static int socket = -1;
 
@@ -133,12 +133,18 @@ void Module::CheckCTroll3D(CTroll3DInfo *info) {
     if (socket != -1) {
         while(recv(socket, ptr, 1, 0) == 1) {
             ++ptr;
-            if ((ptr - ((char *)&buf)) == 10) {
+            if ((ptr - ((char *)&buf)) == 22) {
                 info->pressedButtons = buf.pressedButtons;
                 info->cPadX = buf.cPadX;
                 info->cPadY = buf.cPadY;
                 info->touchX = buf.touchX;
                 info->touchY = buf.touchY;
+                info->accelX = buf.accelX;
+                info->accelY = buf.accelY;
+                info->accelZ = buf.accelZ;
+                info->gyroX = buf.gyroX;
+                info->gyroY = buf.gyroY;
+                info->gyroZ = buf.gyroZ;
                 ptr = (char *)&buf;
             }
         }
@@ -170,7 +176,6 @@ void Module::UpdatePadCallback(u64 userdata, s64 cycles_late) {
     if (is_device_reload_pending.exchange(false))
         LoadInputDevices();
 
-    static CTroll3DInfo ctroll3d = {0, 0, 0};
     CheckCTroll3D(&ctroll3d);
 
     using namespace Settings::NativeButton;
@@ -304,9 +309,9 @@ void Module::UpdateAccelerometerCallback(u64 userdata, s64 cycles_late) {
     AccelerometerDataEntry& accelerometer_entry =
         mem->accelerometer.entries[mem->accelerometer.index];
 
-    accelerometer_entry.x = static_cast<s16>(accel.x);
-    accelerometer_entry.y = static_cast<s16>(accel.y);
-    accelerometer_entry.z = static_cast<s16>(accel.z);
+    accelerometer_entry.x = ctroll3d.accelX + static_cast<s16>(accel.x);
+    accelerometer_entry.y = ctroll3d.accelY + static_cast<s16>(accel.y);
+    accelerometer_entry.z = ctroll3d.accelZ + static_cast<s16>(accel.z);
 
     Core::Movie::GetInstance().HandleAccelerometerStatus(accelerometer_entry);
 
@@ -345,9 +350,9 @@ void Module::UpdateGyroscopeCallback(u64 userdata, s64 cycles_late) {
     std::tie(std::ignore, gyro) = motion_device->GetStatus();
     double stretch = system.perf_stats->GetLastFrameTimeScale();
     gyro *= gyroscope_coef * static_cast<float>(stretch);
-    gyroscope_entry.x = static_cast<s16>(gyro.x);
-    gyroscope_entry.y = static_cast<s16>(gyro.y);
-    gyroscope_entry.z = static_cast<s16>(gyro.z);
+    gyroscope_entry.x = ctroll3d.gyroX + static_cast<s16>(gyro.x);
+    gyroscope_entry.y = ctroll3d.gyroY + static_cast<s16>(gyro.y);
+    gyroscope_entry.z = ctroll3d.gyroZ + static_cast<s16>(gyro.z);
 
     Core::Movie::GetInstance().HandleGyroscopeStatus(gyroscope_entry);
 
