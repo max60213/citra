@@ -426,14 +426,348 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
         layout);
 }
 
-void GRenderWindow::ConnectCTroll3D(const QString& address) {
-  const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(320, 240)};
-  screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB32);
 
-  VideoCore::RequestCTroll3D(
-      screen_image.bits(),
-      address.toStdString().c_str(),
-      layout);
+#define PORT 6543
+
+#define USE_QTSOCKETS
+//#define USE_JPEGLIB
+
+#ifdef USE_QTSOCKETS
+#include <QTcpSocket>
+#include <QAbstractSocket>
+
+int socketSend(QTcpSocket& sock, const char *data, int sz) {
+    if (sock.state() != QAbstractSocket::ConnectedState) return 0;
+
+    sock.write(data, sz);
+    sock.waitForBytesWritten();
+
+    return 1;
+}
+
+int readConfirmation(QTcpSocket& sock) {
+    sock.waitForReadyRead(0);
+    if (sock.bytesAvailable() > 0) {
+        sock.readAll();
+        return 1;
+    }
+
+    return 0;
+}
+#else
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <sys/time.h>
+#include <fcntl.h>
+
+int createSocket(unsigned short port, char *addr) {
+    int sock;
+    struct sockaddr_in serv_addr;
+
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        return -1;
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+    inet_pton(AF_INET, addr, &serv_addr.sin_addr);
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        return -1;
+    }
+
+    return sock;
+}
+
+int socketSend(int sock, const char *data, int sz) {
+  if (sock == -1) return 0;
+
+  send(sock, data, sz, 0);
+
+  return 1;
+}
+
+int readConfirmation(int sock) {
+    unsigned char b;
+
+    int result = recv(sock, &b, 1, 0) == 1;
+    while (recv(sock, &b, 1, 0) == 1);
+
+    return result;
+}
+#endif
+
+#ifdef USE_JPEGLIB
+#include "/usr/local/include/jpeglib.h"
+
+#define DECLJPEGOUTBUF(var) unsigned char *var = 0
+const char *jpegCompress(unsigned char *data, int width, int height, int quality, unsigned char **outBuf, unsigned long *outSize) {
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    jpeg_mem_dest(&cinfo, outBuf, outSize);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+
+    jpeg_start_compress(&cinfo, TRUE);
+
+    int row_stride = width * 3;
+    JSAMPROW row_pointer[1];
+    while (cinfo.next_scanline < cinfo.image_height) {
+        row_pointer[0] = &data[cinfo.next_scanline * row_stride];
+        (void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    return (const char *)*outBuf;
+}
+#else
+#include <QBuffer>
+
+#define DECLJPEGOUTBUF(var) QByteArray var
+const char *jpegCompress(unsigned char *data, int width, int height, int quality, QByteArray *outBuf, unsigned long *outSize) {
+    QImage img = QImage(data, width, height, QImage::Format_RGB888);
+
+    outBuf->resize(0);
+    QBuffer buffer(outBuf);
+    buffer.open(QIODevice::WriteOnly);
+    img.save(&buffer, "JPG", quality);
+    buffer.close();
+
+    *outSize = outBuf->size();
+    return outBuf->constData();
+}
+#endif
+
+#define MIN_SQDIFF 128
+
+int squareDiff(unsigned char *ptr1, unsigned char *ptr2, int rowStride) {
+    int diff = 0;
+
+    for (int i=0; i<8; i++) {
+        for (int j=0; j<8; j++) {
+            diff += abs(ptr1[0] - ptr2[0]);
+            diff += abs(ptr1[1] - ptr2[1]);
+            diff += abs(ptr1[2] - ptr2[2]);
+            if (diff > MIN_SQDIFF) return 1;
+            ptr1 += 3;
+            ptr2 += 3;
+        }
+        ptr1 += rowStride - (8 * 3);
+        ptr2 += rowStride - (8 * 3);
+    }
+
+    return 0;
+}
+
+int copySquare(unsigned char *dst, unsigned char *src, int rowStride) {
+    for (int i=0; i<8; i++) {
+        for (int j=0; j<8; j++) {
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+            dst += 3;
+            src += 3;
+        }
+        dst += rowStride - (8 * 3);
+        src += rowStride - (8 * 3);
+    }
+
+    return 0;
+}
+
+
+unsigned char diffBuf[240*320*3];
+unsigned char diffMap[((240 / 8) * (320 / 8)) / 8];
+int putSquare(unsigned char *dst, unsigned char *src, int rowStride) {
+    for (int i=0; i<8; i++) {
+        for (int j=0; j<8; j++) {
+            dst[0] = src[0];
+            dst[1] = src[1];
+            dst[2] = src[2];
+            dst += 3;
+            src += 3;
+        }
+        src += rowStride - (8 * 3);
+    }
+
+    return 0;
+}
+
+unsigned char *lastImage = 0;
+int16_t imageDiff(unsigned char *currentImage, int width, int height) {
+    int16_t numSqDiff = 0;
+    int rowStride = width * 3;
+    int mapPos = 0;
+    int mapMask = 0x01;
+
+    if (lastImage == 0) {
+        lastImage = (unsigned char *) malloc(rowStride * height);
+        memcpy(lastImage, currentImage, rowStride * height);
+        return -1;
+    } else {
+        unsigned char *lPtr = lastImage;
+        unsigned char *cPtr = currentImage;
+
+        for (int i=0; i<height; i+=8) {
+            for (int j=0; j<width; j+=8) {
+                int sDiff = squareDiff(lPtr, cPtr, rowStride);
+                if (sDiff) {
+                    diffMap[mapPos] |= mapMask;
+                    copySquare(lPtr, cPtr, rowStride);
+                    putSquare(diffBuf + 8 * 8 * 3 * numSqDiff, cPtr, rowStride);
+                    ++numSqDiff;
+                } else {
+                    diffMap[mapPos] &= ~mapMask;
+                }
+                if (mapMask == 0x80) {mapMask = 0x01; mapPos++;}
+                else mapMask <<= 1;
+                lPtr += 8 * 3;
+                cPtr += 8 * 3;
+            }
+            lPtr += (8 * rowStride) - rowStride;
+            cPtr += (8 * rowStride) - rowStride;
+        }
+    }
+
+    return numSqDiff;
+}
+
+void GRenderWindow::ConnectCTroll3D(const QString& address) {
+    const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(240, 320)};
+    screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB888);
+
+    VideoCore::RequestCTroll3D(
+        screen_image.bits(),
+        [=](char *frameData)->int {
+            static DECLJPEGOUTBUF(outBuf);
+            static unsigned long outSize = 0;
+            static DECLJPEGOUTBUF(outDiffBuf);
+            static unsigned long outDiffSize = 0;
+            static int sent = 0;
+            static int forceFrame = 0;
+            static int lastFrameWasFull = 0;
+            static int countConfirmation = 2;
+            static unsigned int confirmationDelayed = 0;
+
+#ifdef USE_QTSOCKETS
+            static QTcpSocket sock;
+            static unsigned int waitConnection = 0;
+
+            if (sock.state() != QAbstractSocket::ConnectedState) {
+                if (!waitConnection) {
+                    waitConnection = 300;
+                    sock.connectToHost(address, PORT);
+                    sock.waitForConnected(1000);
+                }
+                else waitConnection--;
+            }
+#else
+            static int sock = -1;
+
+            if (sock == -1) {
+                sock = createSocket(PORT, VideoCore::g_ctroll3d_addr);
+                if (sock != -1) {
+                    fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+                }
+            }
+#endif
+
+            if (sent == countConfirmation) {
+                int confirmed = readConfirmation(sock);
+                if (confirmed) {
+                    if (confirmationDelayed) {
+                        countConfirmation += confirmationDelayed;
+                        if (countConfirmation > 6) countConfirmation = 6;
+                        confirmationDelayed = 0;
+                    } else if (countConfirmation > 2) {
+                        countConfirmation--;
+                    }
+                    sent = 0;
+                } else {
+                    confirmationDelayed += 2;
+                    return 1;
+                }
+            }
+            if (!frameData) return 0;
+
+            int width = layout.width;
+            int height = layout.height;
+
+
+            int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
+            if (lastFrameWasFull) forceFrame = 0;
+            else if (forceFrame > 80) numSq = -1;
+
+            char requireConfirmation = (sent == 0);
+            if (numSq == 0) {
+                char dataType = 0;
+                sent += socketSend(sock, (const char *)&dataType, 1);
+                socketSend(sock, (const char *)&requireConfirmation, 1);
+                forceFrame+=2;
+            } else {
+                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
+                const char *jpgDiffBuf = 0;
+
+                if (numSq > 0) {
+                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
+                }
+
+                if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
+                    char dataType = 2;
+                    uint16_t dataSize = outDiffSize;
+                    sent += socketSend(sock, (const char *)&dataType, 1);
+                    socketSend(sock, (const char *)&requireConfirmation, 1);
+                    socketSend(sock, (const char *)&dataSize, 2);
+                    socketSend(sock, (const char *)diffMap, sizeof(diffMap));
+                    socketSend(sock, jpgDiffBuf, dataSize);
+                    forceFrame+=5;
+                    lastFrameWasFull = 0;
+                } else {
+                    char dataType = 1;
+                    uint16_t dataSize = outSize;
+                    sent += socketSend(sock, (const char *)&dataType, 1);
+                    socketSend(sock, (const char *)&requireConfirmation, 1);
+                    socketSend(sock, (const char *)&dataSize, 2);
+                    socketSend(sock, jpgBuf, dataSize);
+                    forceFrame = 0;
+                    lastFrameWasFull = 1;
+                }
+            }
+
+            if (sent == countConfirmation) {
+                int confirmed = readConfirmation(sock);
+                if (confirmed) {
+                    if (confirmationDelayed) {
+                        countConfirmation += confirmationDelayed;
+                        if (countConfirmation > 6) countConfirmation = 6;
+                        confirmationDelayed = 0;
+                    } else if (countConfirmation > 2) {
+                        countConfirmation--;
+                    }
+                    sent = 0;
+                } else {
+                    confirmationDelayed += 2;
+                    return 1;
+                }
+            }
+
+            return 0;
+        },
+        address.toStdString().c_str(),
+        layout
+    );
 }
 
 void GRenderWindow::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {

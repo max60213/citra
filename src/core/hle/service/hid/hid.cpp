@@ -92,59 +92,6 @@ DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y) {
     return state;
 }
 
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/time.h>
-#include <fcntl.h>
-
-#define PORT 6542
-
-int Module::CreateSocket(unsigned short port, char *addr) {
-  int sock;
-  struct sockaddr_in serv_addr;
-
-  if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    return -1;
-  }
-
-  serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons(port);
-  inet_pton(AF_INET, addr, &serv_addr.sin_addr);
-
-  if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-    return -1;
-  }
-
-  return sock;
-}
-
-void Module::CheckCTroll3D(CTroll3DInfo *info) {
-    static CTroll3DInfo buf = {0, 0, 0, 0, 0};
-    static char *ptr = (char *)&buf;
-    static int socket = -1;
-
-    if (VideoCore::g_ctroll3d_addr && (socket == -1)) {
-        socket = CreateSocket(PORT, VideoCore::g_ctroll3d_addr);
-        if (socket != -1) {
-            fcntl(socket, F_SETFL, fcntl(socket, F_GETFL, 0) | O_NONBLOCK);
-        }
-    }
-
-    if (socket != -1) {
-        while(recv(socket, ptr, 1, 0) == 1) {
-            ++ptr;
-            if ((ptr - ((char *)&buf)) == 10) {
-                info->pressedButtons = buf.pressedButtons;
-                info->cPadX = buf.cPadX;
-                info->cPadY = buf.cPadY;
-                info->touchX = buf.touchX;
-                info->touchY = buf.touchY;
-                ptr = (char *)&buf;
-            }
-        }
-    }
-}
-
 void Module::LoadInputDevices() {
     std::transform(Settings::values.current_input_profile.buttons.begin() +
                        Settings::NativeButton::BUTTON_HID_BEGIN,
@@ -170,22 +117,26 @@ void Module::UpdatePadCallback(u64 userdata, s64 cycles_late) {
     if (is_device_reload_pending.exchange(false))
         LoadInputDevices();
 
-    static CTroll3DInfo ctroll3d = {0, 0, 0};
-    CheckCTroll3D(&ctroll3d);
+    static std::unique_ptr<CTroll3D::CTroll3DInterface> ctroll3d = CTroll3D::CreateCTroll3D("ctroll3d");
+    if (!ctroll3d) {
+        ctroll3d = CTroll3D::CreateCTroll3D("ctroll3d");
+    } else {
+        ctroll3d->UpdateStatus(VideoCore::g_ctroll3d_addr, &ctroll3dInfo);
+    }
 
     using namespace Settings::NativeButton;
-    state.a.Assign(buttons[A - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 1));
-    state.b.Assign(buttons[B - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 2));
-    state.x.Assign(buttons[X - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 4));
-    state.y.Assign(buttons[Y - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 8));
-    state.right.Assign(buttons[Right - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 16));
-    state.left.Assign(buttons[Left - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 32));
-    state.up.Assign(buttons[Up - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 64));
-    state.down.Assign(buttons[Down - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 128));
-    state.l.Assign(buttons[L - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 256));
-    state.r.Assign(buttons[R - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 512));
-    state.start.Assign(buttons[Start - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 1024));
-    state.select.Assign(buttons[Select - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3d.pressedButtons & 2048));
+    state.a.Assign(buttons[A - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 1));
+    state.b.Assign(buttons[B - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 2));
+    state.x.Assign(buttons[X - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 4));
+    state.y.Assign(buttons[Y - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 8));
+    state.right.Assign(buttons[Right - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 16));
+    state.left.Assign(buttons[Left - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 32));
+    state.up.Assign(buttons[Up - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 64));
+    state.down.Assign(buttons[Down - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 128));
+    state.l.Assign(buttons[L - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 256));
+    state.r.Assign(buttons[R - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 512));
+    state.start.Assign(buttons[Start - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 1024));
+    state.select.Assign(buttons[Select - BUTTON_HID_BEGIN]->GetStatus() || (ctroll3dInfo.pressedButtons & 2048));
     state.debug.Assign(buttons[Debug - BUTTON_HID_BEGIN]->GetStatus());
     state.gpio14.Assign(buttons[Gpio14 - BUTTON_HID_BEGIN]->GetStatus());
 
@@ -201,10 +152,10 @@ void Module::UpdatePadCallback(u64 userdata, s64 cycles_late) {
     // These are rounded rather than truncated on actual hardware
     s16 circle_pad_new_x = static_cast<s16>(std::roundf(circle_pad_x_f * MAX_CIRCLEPAD_POS));
     s16 circle_pad_new_y = static_cast<s16>(std::roundf(circle_pad_y_f * MAX_CIRCLEPAD_POS));
-    s16 circle_pad_x = ctroll3d.cPadX +
+    s16 circle_pad_x = ctroll3dInfo.cPadX +
         (circle_pad_new_x + std::accumulate(circle_pad_old_x.begin(), circle_pad_old_x.end(), 0)) /
         CIRCLE_PAD_AVERAGING;
-    s16 circle_pad_y = ctroll3d.cPadY +
+    s16 circle_pad_y = ctroll3dInfo.cPadY +
         (circle_pad_new_y + std::accumulate(circle_pad_old_y.begin(), circle_pad_old_y.end(), 0)) /
         CIRCLE_PAD_AVERAGING;
     circle_pad_old_x.erase(circle_pad_old_x.begin());
@@ -258,9 +209,9 @@ void Module::UpdatePadCallback(u64 userdata, s64 cycles_late) {
     if (!pressed && touch_btn_device) {
         std::tie(x, y, pressed) = touch_btn_device->GetStatus();
     }
-    touch_entry.x = ctroll3d.touchX + static_cast<u16>(x * Core::kScreenBottomWidth);
-    touch_entry.y = ctroll3d.touchY + static_cast<u16>(y * Core::kScreenBottomHeight);
-    pressed |= (ctroll3d.touchX != 0) || (ctroll3d.touchY != 0);
+    touch_entry.x = ctroll3dInfo.touchX + static_cast<u16>(x * Core::kScreenBottomWidth);
+    touch_entry.y = ctroll3dInfo.touchY + static_cast<u16>(y * Core::kScreenBottomHeight);
+    pressed |= (ctroll3dInfo.touchX != 0) || (ctroll3dInfo.touchY != 0);
     touch_entry.valid.Assign(pressed ? 1 : 0);
 
     Core::Movie::GetInstance().HandleTouchStatus(touch_entry);
@@ -304,9 +255,9 @@ void Module::UpdateAccelerometerCallback(u64 userdata, s64 cycles_late) {
     AccelerometerDataEntry& accelerometer_entry =
         mem->accelerometer.entries[mem->accelerometer.index];
 
-    accelerometer_entry.x = static_cast<s16>(accel.x);
-    accelerometer_entry.y = static_cast<s16>(accel.y);
-    accelerometer_entry.z = static_cast<s16>(accel.z);
+    accelerometer_entry.x = ctroll3dInfo.accelX + static_cast<s16>(accel.x);
+    accelerometer_entry.y = ctroll3dInfo.accelY + static_cast<s16>(accel.y);
+    accelerometer_entry.z = ctroll3dInfo.accelZ + static_cast<s16>(accel.z);
 
     Core::Movie::GetInstance().HandleAccelerometerStatus(accelerometer_entry);
 
@@ -345,9 +296,9 @@ void Module::UpdateGyroscopeCallback(u64 userdata, s64 cycles_late) {
     std::tie(std::ignore, gyro) = motion_device->GetStatus();
     double stretch = system.perf_stats->GetLastFrameTimeScale();
     gyro *= gyroscope_coef * static_cast<float>(stretch);
-    gyroscope_entry.x = static_cast<s16>(gyro.x);
-    gyroscope_entry.y = static_cast<s16>(gyro.y);
-    gyroscope_entry.z = static_cast<s16>(gyro.z);
+    gyroscope_entry.x = ctroll3dInfo.gyroX + static_cast<s16>(gyro.x);
+    gyroscope_entry.y = ctroll3dInfo.gyroY + static_cast<s16>(gyro.y);
+    gyroscope_entry.z = ctroll3dInfo.gyroZ + static_cast<s16>(gyro.z);
 
     Core::Movie::GetInstance().HandleGyroscopeStatus(gyroscope_entry);
 

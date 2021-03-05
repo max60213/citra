@@ -93,7 +93,7 @@ private:
     void ConfigureFramebufferTexture(TextureInfo& texture,
                                      const GPU::Regs::FramebufferConfig& framebuffer);
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
-    void DrawOnlyBottomScreen(const Layout::FramebufferLayout& layout, bool flipped);
+    void DrawCTroll3DBottomScreen(const Layout::FramebufferLayout& layout);
     void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,

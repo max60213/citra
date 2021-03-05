@@ -29,6 +29,7 @@
 #include "citra_qt/bootmanager.h"
 #include "citra_qt/camera/qt_multimedia_camera.h"
 #include "citra_qt/camera/still_image_camera.h"
+#include "citra_qt/ctroll3d/qt_ctroll3d.h"
 #include "citra_qt/cheats.h"
 #include "citra_qt/compatdb.h"
 #include "citra_qt/compatibility_list.h"
@@ -2472,6 +2473,9 @@ int main(int argc, char* argv[]) {
     Camera::RegisterFactory("image", std::make_unique<Camera::StillImageCameraFactory>());
     Camera::RegisterFactory("qt", std::make_unique<Camera::QtMultimediaCameraFactory>());
     Camera::QtMultimediaCameraHandler::Init();
+
+    // Register CTroll3DFactory
+    CTroll3D::RegisterFactory("ctroll3d", std::make_unique<CTroll3D::QtCTroll3DFactory>());
 
     // Register frontend applets
     Frontend::RegisterDefaultApplets();

@@ -14,6 +14,8 @@
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "core/frontend/input.h"
+#include "core/frontend/ctroll3d/interface.h"
+#include "core/frontend/ctroll3d/factory.h"
 #include "core/hle/service/service.h"
 #include "core/settings.h"
 
@@ -195,15 +197,6 @@ struct DirectionState {
     bool right;
 };
 
-typedef struct {
-  uint16_t pressedButtons;
-  int16_t cPadX;
-  int16_t cPadY;
-  uint16_t touchX;
-  uint16_t touchY;
-} CTroll3DInfo;
-
-
 /// Translates analog stick axes to directions. This is exposed for ir_rst module to use.
 DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y);
 
@@ -360,6 +353,8 @@ private:
     std::unique_ptr<Input::MotionDevice> motion_device;
     std::unique_ptr<Input::TouchDevice> touch_device;
     std::unique_ptr<Input::TouchDevice> touch_btn_device;
+
+    CTroll3DInfo ctroll3dInfo = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);
