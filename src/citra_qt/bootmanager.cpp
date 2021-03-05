@@ -429,13 +429,8 @@ void GRenderWindow::CaptureScreenshot(u32 res_scale, const QString& screenshot_p
 
 #define PORT 6543
 
-#define USE_QTSOCKETS
-//#define USE_JPEGLIB
-
-#ifdef USE_QTSOCKETS
 #include <QTcpSocket>
 #include <QAbstractSocket>
-
 int socketSend(QTcpSocket& sock, const char *data, int sz) {
     if (sock.state() != QAbstractSocket::ConnectedState) return 0;
 
@@ -454,87 +449,8 @@ int readConfirmation(QTcpSocket& sock) {
 
     return 0;
 }
-#else
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <sys/time.h>
-#include <fcntl.h>
 
-int createSocket(unsigned short port, char *addr) {
-    int sock;
-    struct sockaddr_in serv_addr;
-
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        return -1;
-    }
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
-    inet_pton(AF_INET, addr, &serv_addr.sin_addr);
-
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        return -1;
-    }
-
-    return sock;
-}
-
-int socketSend(int sock, const char *data, int sz) {
-  if (sock == -1) return 0;
-
-  send(sock, data, sz, 0);
-
-  return 1;
-}
-
-int readConfirmation(int sock) {
-    unsigned char b;
-
-    int result = recv(sock, &b, 1, 0) == 1;
-    while (recv(sock, &b, 1, 0) == 1);
-
-    return result;
-}
-#endif
-
-#ifdef USE_JPEGLIB
-#include "/usr/local/include/jpeglib.h"
-
-#define DECLJPEGOUTBUF(var) unsigned char *var = 0
-const char *jpegCompress(unsigned char *data, int width, int height, int quality, unsigned char **outBuf, unsigned long *outSize) {
-    struct jpeg_compress_struct cinfo;
-    struct jpeg_error_mgr jerr;
-
-    cinfo.err = jpeg_std_error(&jerr);
-    jpeg_create_compress(&cinfo);
-
-    jpeg_mem_dest(&cinfo, outBuf, outSize);
-
-    cinfo.image_width = width;
-    cinfo.image_height = height;
-    cinfo.input_components = 3;
-    cinfo.in_color_space = JCS_RGB;
-
-    jpeg_set_defaults(&cinfo);
-    jpeg_set_quality(&cinfo, quality, TRUE);
-
-    jpeg_start_compress(&cinfo, TRUE);
-
-    int row_stride = width * 3;
-    JSAMPROW row_pointer[1];
-    while (cinfo.next_scanline < cinfo.image_height) {
-        row_pointer[0] = &data[cinfo.next_scanline * row_stride];
-        (void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
-    }
-
-    jpeg_finish_compress(&cinfo);
-    jpeg_destroy_compress(&cinfo);
-
-    return (const char *)*outBuf;
-}
-#else
 #include <QBuffer>
-
 #define DECLJPEGOUTBUF(var) QByteArray var
 const char *jpegCompress(unsigned char *data, int width, int height, int quality, QByteArray *outBuf, unsigned long *outSize) {
     QImage img = QImage(data, width, height, QImage::Format_RGB888);
@@ -548,10 +464,8 @@ const char *jpegCompress(unsigned char *data, int width, int height, int quality
     *outSize = outBuf->size();
     return outBuf->constData();
 }
-#endif
 
 #define MIN_SQDIFF 128
-
 int squareDiff(unsigned char *ptr1, unsigned char *ptr2, int rowStride) {
     int diff = 0;
 
@@ -661,7 +575,6 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             static int countConfirmation = 2;
             static unsigned int confirmationDelayed = 0;
 
-#ifdef USE_QTSOCKETS
             static QTcpSocket sock;
             static unsigned int waitConnection = 0;
 
@@ -673,16 +586,6 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
                 }
                 else waitConnection--;
             }
-#else
-            static int sock = -1;
-
-            if (sock == -1) {
-                sock = createSocket(PORT, VideoCore::g_ctroll3d_addr);
-                if (sock != -1) {
-                    fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
-                }
-            }
-#endif
 
             if (sent == countConfirmation) {
                 int confirmed = readConfirmation(sock);
