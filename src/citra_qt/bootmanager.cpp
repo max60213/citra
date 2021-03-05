@@ -667,7 +667,7 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
             if (sock.state() != QAbstractSocket::ConnectedState) {
                 if (!waitConnection) {
-                    waitConnection = 600;
+                    waitConnection = 300;
                     sock.connectToHost(address, PORT);
                     sock.waitForConnected(1000);
                 }
