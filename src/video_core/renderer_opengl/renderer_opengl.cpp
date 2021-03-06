@@ -531,12 +531,6 @@ void RendererOpenGL::RenderCTroll3D() {
         glGenRenderbuffers(1, &renderbuffer);
     }
 
-    if (waitingConfirmation) {
-        Layout::FramebufferLayout layout;
-        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
-        if (waitingConfirmation) return;
-    }
-
     gettimeofday(&time, 0);
     if (frames == -1) frames = 0;
     else {
@@ -554,6 +548,17 @@ void RendererOpenGL::RenderCTroll3D() {
         }
     }
     lastTime = time;
+
+    if (waitingConfirmation) {
+        Layout::FramebufferLayout layout;
+        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
+        if (waitingConfirmation) {
+            skip = 1;
+            ++skips;
+            ++frames;
+        }
+    }
+
 
 #define SKIP_1
 #ifdef SKIP_1
