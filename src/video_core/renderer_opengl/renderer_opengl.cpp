@@ -375,6 +375,15 @@ RendererOpenGL::~RendererOpenGL() = default;
 MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
 MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
 
+#include <sys/time.h>
+
+double diffT(struct timeval *t1, struct timeval *t2) {
+    double diffSec = (double)t2->tv_sec - (double)t1->tv_sec;
+    double diffUSec = (double)t2->tv_usec - (double)t1->tv_usec;
+    return diffSec + diffUSec / 1000000.0;
+}
+
+
 /// Swap buffers (render frame)
 void RendererOpenGL::SwapBuffers() {
     // Maintain the rasterizer's state as a priority
@@ -450,7 +459,7 @@ void RendererOpenGL::RenderScreenshot() {
     }
 }
 
-#define PBO_SZ 2
+#define PBO_SZ 3
 
 #if PBO_SZ >= 2
 GLuint pbo[PBO_SZ];
@@ -505,9 +514,16 @@ void unbindPBO() {
 
 void RendererOpenGL::RenderCTroll3D() {
     static int waitingConfirmation = 0;
-    static int skip = 1;
     static int inited = 0;
     static GLuint renderbuffer;
+
+    int skip = 1;
+    static int frames = -1;
+    static float totalTime = 0;
+    static struct timeval lastTime;
+    struct timeval time;
+    static int skips = 0;
+    static int targetFPS = 5;
 
     if (!inited) {
         inited = 1;
@@ -521,54 +537,105 @@ void RendererOpenGL::RenderCTroll3D() {
         if (waitingConfirmation) return;
     }
 
-    if(skip) --skip;
+    gettimeofday(&time, 0);
+    if (frames == -1) frames = 0;
+    else {
+        totalTime += diffT(&lastTime, &time);
+        float fps = (float)frames / totalTime;
+        if (frames >= 200) {
+            frames /= 10;
+            totalTime /= 10;
+        }
+        if (fps < targetFPS) {
+            ++skips;
+            ++frames;
+        } else {
+            skip = 0;
+        }
+    }
+    lastTime = time;
+
+#define SKIP_1
+#ifdef SKIP_1
+    if (skips > 5) {
+        targetFPS -= 2;
+        if (targetFPS < 5) targetFPS = 5;
+    }
+#else
+    if (skips > 10) {
+        targetFPS -= 5;
+        if (targetFPS < 5) targetFPS = 5;
+    }
+#endif
+
     if (VideoCore::g_ctroll3d_addr && !skip) {
-          skip = 2;
-//          screen_framebuffer.Create();
-          GLuint old_read_fb = state.draw.read_framebuffer;
-          GLuint old_draw_fb = state.draw.draw_framebuffer;
-          state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
-          state.Apply();
+#ifdef SKIP_1
+        if (skips > 1) {
+            targetFPS -= 2;
+            if (targetFPS < 5) targetFPS = 5;
+        } else {
+            targetFPS += 4;
+            if (targetFPS > 60) targetFPS = 60;
+        }
+#else
+        if (skips > 1) {
+            targetFPS -= 2;
+            if (targetFPS < 5) targetFPS = 5;
+        } else {
+            targetFPS+=5;
+            if (targetFPS > 60) targetFPS = 60;
+        }
+#endif
+        printf("TARGET: %d, SKIPS: %d\n", targetFPS, skips);
+        skips = 0;
 
-          Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
+        ++frames;
+        // screen_framebuffer.Create();
+        GLuint old_read_fb = state.draw.read_framebuffer;
+        GLuint old_draw_fb = state.draw.draw_framebuffer;
+        state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
+        state.Apply();
 
-//          GLuint renderbuffer;
-//          glGenRenderbuffers(1, &renderbuffer);
-          glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-          glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
-          glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+        Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
+
+        // GLuint renderbuffer;
+        // glGenRenderbuffers(1, &renderbuffer);
+        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
                                     renderbuffer);
 #if PBO_SZ >= 2
-          initPBO();
+        initPBO();
 #endif
-          layout.top_screen_enabled = false;
-          layout.bottom_screen.top = layout.top_screen.top = 0;
-          layout.bottom_screen.left = layout.top_screen.left = 0;
-          layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
-          layout.bottom_screen.right = layout.top_screen.right = layout.width;
+        layout.top_screen_enabled = false;
+        layout.bottom_screen.top = layout.top_screen.top = 0;
+        layout.bottom_screen.left = layout.top_screen.left = 0;
+        layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
+        layout.bottom_screen.right = layout.top_screen.right = layout.width;
 
 #if PBO_SZ >= 2
-          char *data = readPixelsFromPBO();
-          if (data) {
-              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
-          } else {
-              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
-          }
+        char *data = readPixelsFromPBO();
+
+        if (data) {
+            waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
+        } else {
+            waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+        }
 #endif
-          DrawCTroll3DBottomScreen(layout);
+        DrawCTroll3DBottomScreen(layout);
 #if PBO_SZ >= 2
-          unbindPBO();
+        unbindPBO();
 #else
-          glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
-                       VideoCore::g_ctroll3d_bits);
-          waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+        glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
+                     VideoCore::g_ctroll3d_bits);
+        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
 #endif
 
-//          screen_framebuffer.Release();
-          state.draw.read_framebuffer = old_read_fb;
-          state.draw.draw_framebuffer = old_draw_fb;
-          state.Apply();
-//          glDeleteRenderbuffers(1, &renderbuffer);
+        // screen_framebuffer.Release();
+        state.draw.read_framebuffer = old_read_fb;
+        state.draw.draw_framebuffer = old_draw_fb;
+        state.Apply();
+        // glDeleteRenderbuffers(1, &renderbuffer);
     }
 }
 

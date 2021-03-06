@@ -465,7 +465,9 @@ const char *jpegCompress(unsigned char *data, int width, int height, int quality
     return outBuf->constData();
 }
 
-#define MIN_SQDIFF 128
+//#define MIN_SQDIFF 128
+//#define MIN_SQDIFF (8 * 8 * 3 * 2)
+#define MIN_SQDIFF (8 * 8 * 3)
 int squareDiff(unsigned char *ptr1, unsigned char *ptr2, int rowStride) {
     int diff = 0;
 
@@ -611,7 +613,8 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
             int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
             if (lastFrameWasFull) forceFrame = 0;
-            else if (forceFrame > 80) numSq = -1;
+            else if (forceFrame > 100) numSq = -1;
+            // int16_t numSq = 0;
 
             char requireConfirmation = (sent == 0);
             if (numSq == 0) {
