@@ -394,8 +394,6 @@ void RendererOpenGL::SwapBuffers() {
 
     RenderScreenshot();
 
-    RenderCTroll3D();
-
     const auto& layout = render_window.GetFramebufferLayout();
     RenderToMailbox(layout, render_window.mailbox, false);
 
@@ -406,6 +404,8 @@ void RendererOpenGL::SwapBuffers() {
             LOG_DEBUG(Render_OpenGL, "Frame dumper exception caught: {}", exception.what());
         }
     }
+
+    RenderCTroll3D();
 
     m_current_frame++;
 
@@ -474,33 +474,34 @@ void initPBO() {
         glGenBuffers(PBO_SZ, pbo);
         for (int i = 0; i < PBO_SZ; i++) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[i]);
-            glBufferData(GL_PIXEL_PACK_BUFFER, 240 * 320 * 3, 0, GL_STATIC_READ);
+            glBufferData(GL_PIXEL_PACK_BUFFER, 240 * 320 * 3, 0, GL_STREAM_READ/*GL_STATIC_READ*/);
         }
         init = 0;
     }
 }
 
-int firstFrame = 1;
+int skipMap = PBO_SZ;
 char *readPixelsFromPBO()
 {
     char *data = 0;
-    if (!firstFrame) {
-        // Bind the current buffer
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mCurrentPboIndex]);
 
-        // Read pixels into the bound buffer
-        glReadPixels(0, 0, 240, 320, GL_RGB, GL_UNSIGNED_BYTE, 0);
+    // Bind the current buffer
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mCurrentPboIndex]);
+    // Read pixels into the bound buffer
+    glReadPixels(0, 0, 240, 320, GL_RGB, GL_UNSIGNED_BYTE, 0);
 
+    if (!skipMap) {
+        // Bind the next buffer
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mNextPboIndex]);
         // Map to buffer to a byte buffer, this is our pixel data
-        data = (char *) glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 240 * 320 * 3, GL_MAP_READ_BIT);
+//        data = (char *) glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 240 * 320 * 3, GL_MAP_READ_BIT);
+        data = (char *) glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+    } else {
+        skipMap--;
     }
-    firstFrame = 0;
-
-    // Bind the next buffer
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mNextPboIndex]);
 
     mCurrentPboIndex = (mCurrentPboIndex + 1) % PBO_SZ;
-    mNextPboIndex = (mNextPboIndex + 1) % PBO_SZ;
+    mNextPboIndex = (mCurrentPboIndex + 1) % PBO_SZ;
 
     return data;
 }
@@ -596,8 +597,8 @@ void RendererOpenGL::RenderCTroll3D() {
 
         ++frames;
         // screen_framebuffer.Create();
-        GLuint old_read_fb = state.draw.read_framebuffer;
-        GLuint old_draw_fb = state.draw.draw_framebuffer;
+////        GLuint old_read_fb = state.draw.read_framebuffer;
+////        GLuint old_draw_fb = state.draw.draw_framebuffer;
         state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
         state.Apply();
 
@@ -623,13 +624,15 @@ void RendererOpenGL::RenderCTroll3D() {
 
         if (data) {
             waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         } else {
             waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
         }
 #endif
         DrawCTroll3DBottomScreen(layout);
 #if PBO_SZ >= 2
-        unbindPBO();
+//        unbindPBO();
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, GL_NONE);
 #else
         glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
                      VideoCore::g_ctroll3d_bits);
@@ -637,9 +640,9 @@ void RendererOpenGL::RenderCTroll3D() {
 #endif
 
         // screen_framebuffer.Release();
-        state.draw.read_framebuffer = old_read_fb;
-        state.draw.draw_framebuffer = old_draw_fb;
-        state.Apply();
+////        state.draw.read_framebuffer = old_read_fb;
+////        state.draw.draw_framebuffer = old_draw_fb;
+////        state.Apply();
         // glDeleteRenderbuffers(1, &renderbuffer);
     }
 }
