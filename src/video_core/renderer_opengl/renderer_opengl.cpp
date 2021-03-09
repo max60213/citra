@@ -459,7 +459,7 @@ void RendererOpenGL::RenderScreenshot() {
     }
 }
 
-#define PBO_SZ 3
+#define PBO_SZ 2
 
 #if PBO_SZ >= 2
 GLuint pbo[PBO_SZ];
@@ -518,94 +518,110 @@ void RendererOpenGL::RenderCTroll3D() {
     static int inited = 0;
     static GLuint renderbuffer;
 
-    int skip = 1;
-    static int frames = -1;
-    static float totalTime = 0;
-    static struct timeval lastTime;
-    struct timeval time;
-    static int skips = 0;
-    static int targetFPS = 5;
-
     if (!inited) {
         inited = 1;
         screen_framebuffer.Create();
         glGenRenderbuffers(1, &renderbuffer);
     }
 
+/*
+    int skip = 0;
+    static double targetFPS = 10;
+    static double frames = -1;
+    static double totalT = 0;
+    static struct timeval lastTime;
+    struct timeval time;
+    static int skips = 0;
     gettimeofday(&time, 0);
-    if (frames == -1) frames = 0;
-    else {
-        totalTime += diffT(&lastTime, &time);
-        float fps = (float)frames / totalTime;
-        if (frames >= 200) {
-            frames /= 10;
-            totalTime /= 10;
+    if (frames > 0) {
+        totalT += diffT(&lastTime, &time);
+        if (frames > 10) {
+            double fps = frames / totalT;
+            // printf("target FPS: %f   FPS %f\n", targetFPS, fps);
+            if (fps < targetFPS) {
+                skip = 1;
+            }
         }
-        if (fps < targetFPS) {
-            ++skips;
-            ++frames;
-        } else {
+        if (frames > 100) {
+            frames /= 10;
+            totalT /= 10;
+        }
+    } else {
+      frames = 0;
+    }
+    frames += 1;
+    lastTime = time;
+
+    if (skip) {
+        ++skips;
+        if (skips >= 20) {
+            skips = 0;
             skip = 0;
+            targetFPS -= 10;
+        }
+    }
+    else {
+        targetFPS += 10;
+        skips = 0;
+    }
+    targetFPS++;
+    if (targetFPS > 58) {
+        targetFPS = 58;
+    }
+
+
+    if (waitingConfirmation) {
+        Layout::FramebufferLayout layout;
+        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
+        if (waitingConfirmation) return;
+    }
+*/
+
+//contador para ajustar o numero de skips
+//qdo o contador zerar, se o FPS diminuiu, aumenta o numero de skips. Se nao, diminui os skips
+
+    if (!VideoCore::g_ctroll3d_addr) return;
+
+    int skip = 0;
+    static int firstFrame = 1;
+    static struct timeval lastTime;
+    struct timeval time;
+    static double totalTime = 0;
+    static double mirrorTime = 0;
+    gettimeofday(&time, 0);
+
+    gettimeofday(&time, 0);
+    if (!firstFrame) {
+        totalTime += diffT(&lastTime, &time);
+        if (mirrorTime > (totalTime * 0.15)) skip = 1;
+//        printf("TOTAL: %f, MIRROR: %f, SKIP %d\n", totalTime, mirrorTime, skip);
+        if (totalTime > 10) {
+            totalTime /= 10;
+            mirrorTime /= 10;
         }
     }
     lastTime = time;
+    firstFrame = 0;
 
     if (waitingConfirmation) {
         Layout::FramebufferLayout layout;
         waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
         if (waitingConfirmation) {
             skip = 1;
-            ++skips;
-            ++frames;
         }
     }
 
+    static int oddSkip = 0;
+    if (oddSkip % 2) skip = 1;
+    ++oddSkip;
 
-#define SKIP_1
-#ifdef SKIP_1
-    if (skips > 5) {
-        targetFPS -= 2;
-        if (targetFPS < 5) targetFPS = 5;
-    }
-#else
-    if (skips > 10) {
-        targetFPS -= 5;
-        if (targetFPS < 5) targetFPS = 5;
-    }
-#endif
 
     if (VideoCore::g_ctroll3d_addr && !skip) {
-#ifdef SKIP_1
-        if (skips > 1) {
-            targetFPS -= 2;
-            if (targetFPS < 5) targetFPS = 5;
-        } else {
-            targetFPS += 4;
-            if (targetFPS > 60) targetFPS = 60;
-        }
-#else
-        if (skips > 1) {
-            targetFPS -= 2;
-            if (targetFPS < 5) targetFPS = 5;
-        } else {
-            targetFPS+=5;
-            if (targetFPS > 60) targetFPS = 60;
-        }
-#endif
-        printf("TARGET: %d, SKIPS: %d\n", targetFPS, skips);
-        skips = 0;
-
-        ++frames;
-        // screen_framebuffer.Create();
-////        GLuint old_read_fb = state.draw.read_framebuffer;
-////        GLuint old_draw_fb = state.draw.draw_framebuffer;
         state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
         state.Apply();
 
         Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
 
-        // GLuint renderbuffer;
-        // glGenRenderbuffers(1, &renderbuffer);
         glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
@@ -638,13 +654,10 @@ void RendererOpenGL::RenderCTroll3D() {
                      VideoCore::g_ctroll3d_bits);
         waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
 #endif
-
-        // screen_framebuffer.Release();
-////        state.draw.read_framebuffer = old_read_fb;
-////        state.draw.draw_framebuffer = old_draw_fb;
-////        state.Apply();
-        // glDeleteRenderbuffers(1, &renderbuffer);
     }
+
+    gettimeofday(&time, 0);
+    mirrorTime += diffT(&lastTime, &time);
 }
 
 void RendererOpenGL::PrepareRendertarget() {

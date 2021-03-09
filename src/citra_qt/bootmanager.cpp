@@ -588,14 +588,14 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         if (confirmed) {
             if (confirmationDelayed) {
                 countConfirmation += confirmationDelayed;
-                if (countConfirmation > 6) countConfirmation = 6;
+                if (countConfirmation > 4) countConfirmation = 4;
                 confirmationDelayed = 0;
             } else if (countConfirmation > 2) {
                 countConfirmation--;
             }
             sent = 0;
         } else {
-            confirmationDelayed += 2;
+            confirmationDelayed += 1;
             return 1;
         }
     }
@@ -617,11 +617,19 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         socketSend(sock, (const char *)&requireConfirmation, 1);
         forceFrame+=2;
     } else {
+/*
         const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
         const char *jpgDiffBuf = 0;
 
         if (numSq > 0) {
             jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
+        }
+*/
+        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 75, &outBuf, &outSize);
+        const char *jpgDiffBuf = 0;
+
+        if (numSq > 0) {
+            jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 70, &outDiffBuf, &outDiffSize);
         }
 
         if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
@@ -651,14 +659,14 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         if (confirmed) {
             if (confirmationDelayed) {
                 countConfirmation += confirmationDelayed;
-                if (countConfirmation > 6) countConfirmation = 6;
+                if (countConfirmation > 4) countConfirmation = 4;
                 confirmationDelayed = 0;
             } else if (countConfirmation > 2) {
                 countConfirmation--;
             }
             sent = 0;
         } else {
-            confirmationDelayed += 2;
+            confirmationDelayed += 1;
             return 1;
         }
     }
@@ -670,11 +678,11 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
     const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(240, 320)};
     screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB888);
 
+printf("AQUI!!\n");
     VideoCore::RequestCTroll3D(
         screen_image.bits(),
         [=](char *frameData)->int {
             return GRenderWindow::processFrameData(layout, frameData, address);
-
             // static int hasFuture = 0;
             // static std::future<int> future;
             // int waiting = 1;
@@ -692,110 +700,6 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
             // hasFuture = 1;
             //
             // return waiting;
-
-            // static DECLJPEGOUTBUF(outBuf);
-            // static unsigned long outSize = 0;
-            // static DECLJPEGOUTBUF(outDiffBuf);
-            // static unsigned long outDiffSize = 0;
-            // static int sent = 0;
-            // static int forceFrame = 0;
-            // static int lastFrameWasFull = 0;
-            // static int countConfirmation = 2;
-            // static unsigned int confirmationDelayed = 0;
-            //
-            // static QTcpSocket sock;
-            // static unsigned int waitConnection = 0;
-            //
-            // if (sock.state() != QAbstractSocket::ConnectedState) {
-            //     if (!waitConnection) {
-            //         waitConnection = 300;
-            //         sock.connectToHost(address, PORT);
-            //         sock.waitForConnected(1000);
-            //     }
-            //     else waitConnection--;
-            // }
-            //
-            // if (sent == countConfirmation) {
-            //     int confirmed = readConfirmation(sock);
-            //     if (confirmed) {
-            //         if (confirmationDelayed) {
-            //             countConfirmation += confirmationDelayed;
-            //             if (countConfirmation > 6) countConfirmation = 6;
-            //             confirmationDelayed = 0;
-            //         } else if (countConfirmation > 2) {
-            //             countConfirmation--;
-            //         }
-            //         sent = 0;
-            //     } else {
-            //         confirmationDelayed += 2;
-            //         return 1;
-            //     }
-            // }
-            // if (!frameData) return 0;
-            //
-            // int width = layout.width;
-            // int height = layout.height;
-            //
-            //
-            // int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
-            // if (lastFrameWasFull) forceFrame = 0;
-            // else if (forceFrame > 100) numSq = -1;
-            // // int16_t numSq = 0;
-            //
-            // char requireConfirmation = (sent == 0);
-            // if (numSq == 0) {
-            //     char dataType = 0;
-            //     sent += socketSend(sock, (const char *)&dataType, 1);
-            //     socketSend(sock, (const char *)&requireConfirmation, 1);
-            //     forceFrame+=2;
-            // } else {
-            //     const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
-            //     const char *jpgDiffBuf = 0;
-            //
-            //     if (numSq > 0) {
-            //         jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
-            //     }
-            //
-            //     if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
-            //         char dataType = 2;
-            //         uint16_t dataSize = outDiffSize;
-            //         sent += socketSend(sock, (const char *)&dataType, 1);
-            //         socketSend(sock, (const char *)&requireConfirmation, 1);
-            //         socketSend(sock, (const char *)&dataSize, 2);
-            //         socketSend(sock, (const char *)diffMap, sizeof(diffMap));
-            //         socketSend(sock, jpgDiffBuf, dataSize);
-            //         forceFrame+=5;
-            //         lastFrameWasFull = 0;
-            //     } else {
-            //         char dataType = 1;
-            //         uint16_t dataSize = outSize;
-            //         sent += socketSend(sock, (const char *)&dataType, 1);
-            //         socketSend(sock, (const char *)&requireConfirmation, 1);
-            //         socketSend(sock, (const char *)&dataSize, 2);
-            //         socketSend(sock, jpgBuf, dataSize);
-            //         forceFrame = 0;
-            //         lastFrameWasFull = 1;
-            //     }
-            // }
-            //
-            // if (sent == countConfirmation) {
-            //     int confirmed = readConfirmation(sock);
-            //     if (confirmed) {
-            //         if (confirmationDelayed) {
-            //             countConfirmation += confirmationDelayed;
-            //             if (countConfirmation > 6) countConfirmation = 6;
-            //             confirmationDelayed = 0;
-            //         } else if (countConfirmation > 2) {
-            //             countConfirmation--;
-            //         }
-            //         sent = 0;
-            //     } else {
-            //         confirmationDelayed += 2;
-            //         return 1;
-            //     }
-            // }
-            //
-            // return 0;
         },
         address.toStdString().c_str(),
         layout
