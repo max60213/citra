@@ -524,84 +524,40 @@ void RendererOpenGL::RenderCTroll3D() {
         glGenRenderbuffers(1, &renderbuffer);
     }
 
-/*
-    int skip = 0;
-    static double targetFPS = 10;
-    static double frames = -1;
-    static double totalT = 0;
-    static struct timeval lastTime;
-    struct timeval time;
-    static int skips = 0;
-    gettimeofday(&time, 0);
-    if (frames > 0) {
-        totalT += diffT(&lastTime, &time);
-        if (frames > 10) {
-            double fps = frames / totalT;
-            // printf("target FPS: %f   FPS %f\n", targetFPS, fps);
-            if (fps < targetFPS) {
-                skip = 1;
-            }
-        }
-        if (frames > 100) {
-            frames /= 10;
-            totalT /= 10;
-        }
-    } else {
-      frames = 0;
-    }
-    frames += 1;
-    lastTime = time;
-
-    if (skip) {
-        ++skips;
-        if (skips >= 20) {
-            skips = 0;
-            skip = 0;
-            targetFPS -= 10;
-        }
-    }
-    else {
-        targetFPS += 10;
-        skips = 0;
-    }
-    targetFPS++;
-    if (targetFPS > 58) {
-        targetFPS = 58;
-    }
-
-
-    if (waitingConfirmation) {
-        Layout::FramebufferLayout layout;
-        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
-        if (waitingConfirmation) return;
-    }
-*/
-
-//contador para ajustar o numero de skips
-//qdo o contador zerar, se o FPS diminuiu, aumenta o numero de skips. Se nao, diminui os skips
-
     if (!VideoCore::g_ctroll3d_addr) return;
 
+#define ADJUST_FRAMES 20
     int skip = 0;
-    static int firstFrame = 1;
+    static double lastFPS = 30;
+    static int frame = -1;
+    static float skipRate = 0.2;
+    static float skipCount = 0;
     static struct timeval lastTime;
-    struct timeval time;
-    static double totalTime = 0;
-    static double mirrorTime = 0;
-    gettimeofday(&time, 0);
 
-    gettimeofday(&time, 0);
-    if (!firstFrame) {
-        totalTime += diffT(&lastTime, &time);
-        if (mirrorTime > (totalTime * 0.15)) skip = 1;
-//        printf("TOTAL: %f, MIRROR: %f, SKIP %d\n", totalTime, mirrorTime, skip);
-        if (totalTime > 10) {
-            totalTime /= 10;
-            mirrorTime /= 10;
-        }
+    if (frame == -1) {
+        gettimeofday(&lastTime, 0);
+        frame = 0;
     }
-    lastTime = time;
-    firstFrame = 0;
+
+    if (frame == ADJUST_FRAMES) {
+        struct timeval time;
+        gettimeofday(&time, 0);
+        double fps = ADJUST_FRAMES / diffT(&lastTime, &time);
+        lastTime = time;
+        if (fps < lastFPS) {
+            lastFPS--;
+            skipRate -= 0.1;
+            if (skipRate < 0.05) skipRate = 0.05;
+            if ((fps - 1) > lastFPS) lastFPS = fps - 1;
+        } else {
+            lastFPS = fps-1;
+            skipRate += 0.05;
+            if (skipRate > 0.99) skipRate = 0.99;
+        }
+        if (lastFPS > 58.5) lastFPS = 58.5;
+        frame = 0;
+    }
+    frame++;
 
     if (waitingConfirmation) {
         Layout::FramebufferLayout layout;
@@ -611,10 +567,12 @@ void RendererOpenGL::RenderCTroll3D() {
         }
     }
 
-    static int oddSkip = 0;
-    if (oddSkip % 2) skip = 1;
-    ++oddSkip;
-
+    skipCount += skipRate;
+    if (skipCount < 1.0) {
+        skip = 1;
+    } else {
+        skipCount -= 1.0;
+    }
 
     if (VideoCore::g_ctroll3d_addr && !skip) {
         state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
@@ -655,9 +613,6 @@ void RendererOpenGL::RenderCTroll3D() {
         waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
 #endif
     }
-
-    gettimeofday(&time, 0);
-    mirrorTime += diffT(&lastTime, &time);
 }
 
 void RendererOpenGL::PrepareRendertarget() {

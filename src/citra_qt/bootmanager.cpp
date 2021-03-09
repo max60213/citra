@@ -608,6 +608,8 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
     int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
     if (lastFrameWasFull) forceFrame = 0;
     else if (forceFrame > 100) numSq = -1;
+    //More than half of the screen? Just send the full frame
+    //if (numSq > (((240 / 8) * (320 / 8)) / 2)) numSq = -1;
     // int16_t numSq = 0;
 
     char requireConfirmation = (sent == 0);
@@ -678,7 +680,6 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
     const Layout::FramebufferLayout layout{Layout::CustomFrameLayout(240, 320)};
     screen_image = QImage(QSize(layout.width, layout.height), QImage::Format_RGB888);
 
-printf("AQUI!!\n");
     VideoCore::RequestCTroll3D(
         screen_image.bits(),
         [=](char *frameData)->int {
