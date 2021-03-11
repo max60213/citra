@@ -604,12 +604,16 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
     int width = layout.width;
     int height = layout.height;
 
+    static int checker = 0;
 
-    int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
+    int16_t numSq = 0;
     if (lastFrameWasFull) forceFrame = 0;
     else if (forceFrame > 100) numSq = -1;
+
+    if(checker) numSq = -1;
+    if (numSq != -1) numSq = imageDiff((unsigned char *)frameData, width, height);
     //More than half of the screen? Just send the full frame
-    //if (numSq > (((240 / 8) * (320 / 8)) / 2)) numSq = -1;
+    if (numSq > (((240 / 8) * (320 / 8)) / 3)) numSq = -1;
     // int16_t numSq = 0;
 
     char requireConfirmation = (sent == 0);
@@ -627,7 +631,27 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
             jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
         }
 */
-        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 75, &outBuf, &outSize);
+        char buf[320 * 240 * 3 / 2];
+        char *in = frameData;
+        char *out = buf;
+
+        int skip = checker;
+        for (int j=0; j<height; j++) {
+            for (int i=0; i<width; i++) {
+                if (!skip) {
+                    out[0] = in[0];
+                    out[1] = in[1];
+                    out[2] = in[2];
+                    out+=3;
+                }
+                in+=3;
+                skip = !skip;
+            }
+            skip = !skip;
+        }
+        const char *jpgBuf = jpegCompress((unsigned char *)buf, width/2, height, 70, &outBuf, &outSize);
+
+//        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 75, &outBuf, &outSize);
         const char *jpgDiffBuf = 0;
 
         if (numSq > 0) {
@@ -645,14 +669,25 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
             forceFrame+=5;
             lastFrameWasFull = 0;
         } else {
-            char dataType = 1;
+            char dataType = 3+checker;
             uint16_t dataSize = outSize;
             sent += socketSend(sock, (const char *)&dataType, 1);
             socketSend(sock, (const char *)&requireConfirmation, 1);
             socketSend(sock, (const char *)&dataSize, 2);
             socketSend(sock, jpgBuf, dataSize);
-            forceFrame = 0;
-            lastFrameWasFull = 1;
+            if (checker) {
+                forceFrame = 0;
+                lastFrameWasFull = 1;
+            }
+            checker = (checker+1) & 1;
+            // char dataType = 1;
+            // uint16_t dataSize = outSize;
+            // sent += socketSend(sock, (const char *)&dataType, 1);
+            // socketSend(sock, (const char *)&requireConfirmation, 1);
+            // socketSend(sock, (const char *)&dataSize, 2);
+            // socketSend(sock, jpgBuf, dataSize);
+            // forceFrame = 0;
+            // lastFrameWasFull = 1;
         }
     }
 
