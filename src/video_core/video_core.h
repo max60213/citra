@@ -68,7 +68,7 @@ void RequestScreenshot(void* data, std::function<void()> callback,
                        const Layout::FramebufferLayout& layout);
 
 // Request connection to CTroll3D
-void RequestCTroll3D(void* data, std::function<int(char *)> callback, const char *address,
+void RequestCTroll3D(void* data, std::function<uint8_t(char *)> callback, const char *address,
                       const Layout::FramebufferLayout& layout);
 
 u16 GetResolutionScaleFactor();

@@ -440,11 +440,12 @@ int socketSend(QTcpSocket& sock, const char *data, int sz) {
     return 1;
 }
 
-int readConfirmation(QTcpSocket& sock) {
+uint8_t readConfirmation(QTcpSocket& sock) {
     sock.waitForReadyRead(0);
     if (sock.bytesAvailable() > 0) {
-        sock.readAll();
-        return 1;
+        char result;
+        int rd = sock.read(&result, 1);
+        if (rd > 0) return result;
     }
 
     return 0;
@@ -465,7 +466,9 @@ const char *jpegCompress(unsigned char *data, int width, int height, int quality
     return outBuf->constData();
 }
 
-#define MIN_SQDIFF 128
+//#define MIN_SQDIFF 128
+//#define MIN_SQDIFF (8 * 8 * 3 * 2)
+#define MIN_SQDIFF (8 * 8 * 3)
 int squareDiff(unsigned char *ptr1, unsigned char *ptr2, int rowStride) {
     int diff = 0;
 
@@ -502,7 +505,7 @@ int copySquare(unsigned char *dst, unsigned char *src, int rowStride) {
 }
 
 
-unsigned char diffBuf[240*320*3];
+unsigned char diffBuf[240 * 320 * 3];
 unsigned char diffMap[((240 / 8) * (320 / 8)) / 8];
 int putSquare(unsigned char *dst, unsigned char *src, int rowStride) {
     for (int i=0; i<8; i++) {
@@ -526,36 +529,133 @@ int16_t imageDiff(unsigned char *currentImage, int width, int height) {
     int mapPos = 0;
     int mapMask = 0x01;
 
-    if (lastImage == 0) {
-        lastImage = (unsigned char *) malloc(rowStride * height);
-        memcpy(lastImage, currentImage, rowStride * height);
-        return -1;
-    } else {
-        unsigned char *lPtr = lastImage;
-        unsigned char *cPtr = currentImage;
+    unsigned char *lPtr = lastImage;
+    unsigned char *cPtr = currentImage;
 
-        for (int i=0; i<height; i+=8) {
-            for (int j=0; j<width; j+=8) {
-                int sDiff = squareDiff(lPtr, cPtr, rowStride);
-                if (sDiff) {
-                    diffMap[mapPos] |= mapMask;
-                    copySquare(lPtr, cPtr, rowStride);
-                    putSquare(diffBuf + 8 * 8 * 3 * numSqDiff, cPtr, rowStride);
-                    ++numSqDiff;
-                } else {
-                    diffMap[mapPos] &= ~mapMask;
-                }
-                if (mapMask == 0x80) {mapMask = 0x01; mapPos++;}
-                else mapMask <<= 1;
-                lPtr += 8 * 3;
-                cPtr += 8 * 3;
+    for (int i=0; i<height; i+=8) {
+        for (int j=0; j<width; j+=8) {
+            int sDiff = squareDiff(lPtr, cPtr, rowStride);
+            if (sDiff) {
+                diffMap[mapPos] |= mapMask;
+                copySquare(lPtr, cPtr, rowStride);
+                putSquare(diffBuf + 8 * 8 * 3 * numSqDiff, cPtr, rowStride);
+                ++numSqDiff;
+            } else {
+                diffMap[mapPos] &= ~mapMask;
             }
-            lPtr += (8 * rowStride) - rowStride;
-            cPtr += (8 * rowStride) - rowStride;
+            if (mapMask == 0x80) {mapMask = 0x01; mapPos++;}
+            else mapMask <<= 1;
+            lPtr += 8 * 3;
+            cPtr += 8 * 3;
         }
+        lPtr += (8 * rowStride) - rowStride;
+        cPtr += (8 * rowStride) - rowStride;
     }
 
     return numSqDiff;
+}
+
+#define FM_NONE 0
+#define FM_FULL 1
+#define FM_DIFF 2
+#define FM_CHECKER 3
+#define FM_CHECKER_COMPL 4
+
+uint8_t GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address) {
+    static DECLJPEGOUTBUF(outBuf);
+    static unsigned long outSize = 0;
+    static DECLJPEGOUTBUF(outDiffBuf);
+    static unsigned long outDiffSize = 0;
+    static int forceFrameCount = 0;
+    static int checker = 0;
+    static uint16_t lastFrameMode = FM_NONE;
+
+    static QTcpSocket sock;
+    static unsigned int waitConnection = 0;
+
+    if (sock.state() != QAbstractSocket::ConnectedState) {
+        if (!waitConnection) {
+            waitConnection = 300;
+            sock.connectToHost(address, PORT);
+            sock.waitForConnected(1000);
+        }
+        else waitConnection--;
+    }
+
+    if (!frameData) {
+        return readConfirmation(sock);
+    }
+
+    int width = layout.width;
+    int height = layout.height;
+
+    uint16_t frameMode = FM_NONE;
+    if (forceFrameCount > 100) frameMode = FM_FULL;
+    else if (lastFrameMode == FM_CHECKER) frameMode = FM_CHECKER_COMPL;
+
+    int16_t numSq = 0;
+    if (!lastImage) {
+        lastImage = (unsigned char *) malloc(width * height * 3);
+        memcpy(lastImage, frameData, width * height * 3);
+        frameMode = FM_FULL;
+    } else if ((frameMode != FM_FULL) && (frameMode != FM_CHECKER_COMPL)) {
+        numSq = imageDiff((unsigned char *)frameData, width, height);
+        if (numSq > (((240 / 8) * (320 / 8)) / 3)) frameMode = FM_CHECKER;
+        else if (numSq > 0) frameMode = FM_DIFF;
+        else frameMode = FM_NONE;
+    }
+    lastFrameMode = frameMode;
+
+    if (frameMode == FM_NONE) {
+        socketSend(sock, (const char *)&frameMode, 2);
+        forceFrameCount+=1;
+    }
+    if (frameMode == FM_FULL) {
+        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 70, &outBuf, &outSize);
+        uint16_t dataSize = outSize;
+        socketSend(sock, (const char *)&frameMode, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, jpgBuf, dataSize);
+        forceFrameCount = 0;
+    } else if (frameMode == FM_DIFF) {
+        const char *jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 70, &outDiffBuf, &outDiffSize);
+        uint16_t dataSize = outDiffSize;
+        socketSend(sock, (const char *)&frameMode, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, (const char *)diffMap, sizeof(diffMap));
+        socketSend(sock, jpgDiffBuf, dataSize);
+        forceFrameCount += 5;
+    } else if ((frameMode == FM_CHECKER) || (frameMode == FM_CHECKER_COMPL)) {
+        char buf[width * height * 3 / 2];
+        char *in = frameData;
+        char *out = buf;
+
+        int skip = checker;
+        for (int j=0; j<height; j++) {
+            for (int i=0; i<width; i++) {
+                if (!skip) {
+                    out[0] = in[0];
+                    out[1] = in[1];
+                    out[2] = in[2];
+                    out+=3;
+                }
+                in+=3;
+                skip = !skip;
+            }
+            skip = !skip;
+        }
+        const char *jpgBuf = jpegCompress((unsigned char *)buf, width/2, height, 70, &outBuf, &outSize);
+
+        uint16_t dataType = 3+checker;
+        uint16_t dataSize = outSize;
+        socketSend(sock, (const char *)&dataType, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, jpgBuf, dataSize);
+        checker = (checker+1) & 1;
+        forceFrameCount+=3;
+    }
+
+    return readConfirmation(sock);
 }
 
 void GRenderWindow::ConnectCTroll3D(const QString& address) {
@@ -564,109 +664,25 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
     VideoCore::RequestCTroll3D(
         screen_image.bits(),
-        [=](char *frameData)->int {
-            static DECLJPEGOUTBUF(outBuf);
-            static unsigned long outSize = 0;
-            static DECLJPEGOUTBUF(outDiffBuf);
-            static unsigned long outDiffSize = 0;
-            static int sent = 0;
-            static int forceFrame = 0;
-            static int lastFrameWasFull = 0;
-            static int countConfirmation = 2;
-            static unsigned int confirmationDelayed = 0;
-
-            static QTcpSocket sock;
-            static unsigned int waitConnection = 0;
-
-            if (sock.state() != QAbstractSocket::ConnectedState) {
-                if (!waitConnection) {
-                    waitConnection = 300;
-                    sock.connectToHost(address, PORT);
-                    sock.waitForConnected(1000);
-                }
-                else waitConnection--;
-            }
-
-            if (sent == countConfirmation) {
-                int confirmed = readConfirmation(sock);
-                if (confirmed) {
-                    if (confirmationDelayed) {
-                        countConfirmation += confirmationDelayed;
-                        if (countConfirmation > 6) countConfirmation = 6;
-                        confirmationDelayed = 0;
-                    } else if (countConfirmation > 2) {
-                        countConfirmation--;
-                    }
-                    sent = 0;
-                } else {
-                    confirmationDelayed += 2;
-                    return 1;
-                }
-            }
-            if (!frameData) return 0;
-
-            int width = layout.width;
-            int height = layout.height;
-
-
-            int16_t numSq = imageDiff((unsigned char *)frameData, width, height);
-            if (lastFrameWasFull) forceFrame = 0;
-            else if (forceFrame > 80) numSq = -1;
-
-            char requireConfirmation = (sent == 0);
-            if (numSq == 0) {
-                char dataType = 0;
-                sent += socketSend(sock, (const char *)&dataType, 1);
-                socketSend(sock, (const char *)&requireConfirmation, 1);
-                forceFrame+=2;
-            } else {
-                const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
-                const char *jpgDiffBuf = 0;
-
-                if (numSq > 0) {
-                    jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
-                }
-
-                if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
-                    char dataType = 2;
-                    uint16_t dataSize = outDiffSize;
-                    sent += socketSend(sock, (const char *)&dataType, 1);
-                    socketSend(sock, (const char *)&requireConfirmation, 1);
-                    socketSend(sock, (const char *)&dataSize, 2);
-                    socketSend(sock, (const char *)diffMap, sizeof(diffMap));
-                    socketSend(sock, jpgDiffBuf, dataSize);
-                    forceFrame+=5;
-                    lastFrameWasFull = 0;
-                } else {
-                    char dataType = 1;
-                    uint16_t dataSize = outSize;
-                    sent += socketSend(sock, (const char *)&dataType, 1);
-                    socketSend(sock, (const char *)&requireConfirmation, 1);
-                    socketSend(sock, (const char *)&dataSize, 2);
-                    socketSend(sock, jpgBuf, dataSize);
-                    forceFrame = 0;
-                    lastFrameWasFull = 1;
-                }
-            }
-
-            if (sent == countConfirmation) {
-                int confirmed = readConfirmation(sock);
-                if (confirmed) {
-                    if (confirmationDelayed) {
-                        countConfirmation += confirmationDelayed;
-                        if (countConfirmation > 6) countConfirmation = 6;
-                        confirmationDelayed = 0;
-                    } else if (countConfirmation > 2) {
-                        countConfirmation--;
-                    }
-                    sent = 0;
-                } else {
-                    confirmationDelayed += 2;
-                    return 1;
-                }
-            }
-
-            return 0;
+        [=](char *frameData)->uint8_t {
+            return GRenderWindow::processFrameData(layout, frameData, address);
+            // static int hasFuture = 0;
+            // static std::future<int> future;
+            // int waiting = 1;
+            //
+            // if (hasFuture) {
+            //     std::future_status status = future.wait_for(std::chrono::seconds(0));
+            //     if (status == std::future_status::ready) {
+            //         waiting = future.get();
+            //         future = std::async(std::launch::async, GRenderWindow::processFrameData, layout, frameData, address);
+            //     }
+            // } else {
+            //     waiting = 0;
+            //     future = std::async(std::launch::async, GRenderWindow::processFrameData, layout, frameData, address);
+            // }
+            // hasFuture = 1;
+            //
+            // return waiting;
         },
         address.toStdString().c_str(),
         layout

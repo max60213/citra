@@ -375,6 +375,15 @@ RendererOpenGL::~RendererOpenGL() = default;
 MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
 MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
 
+#include <sys/time.h>
+
+double diffT(struct timeval *t1, struct timeval *t2) {
+    double diffSec = (double)t2->tv_sec - (double)t1->tv_sec;
+    double diffUSec = (double)t2->tv_usec - (double)t1->tv_usec;
+    return diffSec + diffUSec / 1000000.0;
+}
+
+
 /// Swap buffers (render frame)
 void RendererOpenGL::SwapBuffers() {
     // Maintain the rasterizer's state as a priority
@@ -384,8 +393,6 @@ void RendererOpenGL::SwapBuffers() {
     PrepareRendertarget();
 
     RenderScreenshot();
-
-    RenderCTroll3D();
 
     const auto& layout = render_window.GetFramebufferLayout();
     RenderToMailbox(layout, render_window.mailbox, false);
@@ -397,6 +404,8 @@ void RendererOpenGL::SwapBuffers() {
             LOG_DEBUG(Render_OpenGL, "Frame dumper exception caught: {}", exception.what());
         }
     }
+
+    RenderCTroll3D();
 
     m_current_frame++;
 
@@ -465,33 +474,34 @@ void initPBO() {
         glGenBuffers(PBO_SZ, pbo);
         for (int i = 0; i < PBO_SZ; i++) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[i]);
-            glBufferData(GL_PIXEL_PACK_BUFFER, 240 * 320 * 3, 0, GL_STATIC_READ);
+            glBufferData(GL_PIXEL_PACK_BUFFER, 240 * 320 * 3, 0, GL_STREAM_READ/*GL_STATIC_READ*/);
         }
         init = 0;
     }
 }
 
-int firstFrame = 1;
+int skipMap = PBO_SZ;
 char *readPixelsFromPBO()
 {
     char *data = 0;
-    if (!firstFrame) {
-        // Bind the current buffer
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mCurrentPboIndex]);
 
-        // Read pixels into the bound buffer
-        glReadPixels(0, 0, 240, 320, GL_RGB, GL_UNSIGNED_BYTE, 0);
+    // Bind the current buffer
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mCurrentPboIndex]);
+    // Read pixels into the bound buffer
+    glReadPixels(0, 0, 240, 320, GL_RGB, GL_UNSIGNED_BYTE, 0);
 
+    if (!skipMap) {
+        // Bind the next buffer
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mNextPboIndex]);
         // Map to buffer to a byte buffer, this is our pixel data
-        data = (char *) glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 240 * 320 * 3, GL_MAP_READ_BIT);
+//        data = (char *) glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 240 * 320 * 3, GL_MAP_READ_BIT);
+        data = (char *) glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+    } else {
+        skipMap--;
     }
-    firstFrame = 0;
-
-    // Bind the next buffer
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo[mNextPboIndex]);
 
     mCurrentPboIndex = (mCurrentPboIndex + 1) % PBO_SZ;
-    mNextPboIndex = (mNextPboIndex + 1) % PBO_SZ;
+    mNextPboIndex = (mCurrentPboIndex + 1) % PBO_SZ;
 
     return data;
 }
@@ -505,7 +515,6 @@ void unbindPBO() {
 
 void RendererOpenGL::RenderCTroll3D() {
     static int waitingConfirmation = 0;
-    static int skip = 1;
     static int inited = 0;
     static GLuint renderbuffer;
 
@@ -515,60 +524,102 @@ void RendererOpenGL::RenderCTroll3D() {
         glGenRenderbuffers(1, &renderbuffer);
     }
 
-    if (waitingConfirmation) {
-        Layout::FramebufferLayout layout;
-        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
-        if (waitingConfirmation) return;
+    if (!VideoCore::g_ctroll3d_addr) return;
+
+#define ADJUST_FRAMES 20
+    int skip = 0;
+    static double lastFPS = 30;
+    static int frame = -1;
+    static uint8_t sentFrame = 0;
+    static uint8_t remoteFrame = 0;
+    static float skipRate = 0.2;
+    static float skipCount = 0;
+    static struct timeval lastTime;
+
+    if (frame == -1) {
+        gettimeofday(&lastTime, 0);
+        frame = 0;
     }
 
-    if(skip) --skip;
+    if (frame == ADJUST_FRAMES) {
+        struct timeval time;
+        gettimeofday(&time, 0);
+        double fps = ADJUST_FRAMES / diffT(&lastTime, &time);
+        lastTime = time;
+        if (fps < lastFPS) {
+            lastFPS--;
+            skipRate -= 0.1;
+            if (skipRate < 0.05) skipRate = 0.05;
+            if ((fps - 1) > lastFPS) lastFPS = fps - 1;
+        } else {
+            lastFPS = fps-1;
+            skipRate += 0.05;
+            if (skipRate > 0.99) skipRate = 0.99;
+        }
+        if (lastFPS > 58.5) lastFPS = 58.5;
+        frame = 0;
+    }
+    frame++;
+
+    int dFrame = (sentFrame >= remoteFrame) ? sentFrame-remoteFrame : sentFrame+256-remoteFrame;
+    if (dFrame > 4) {
+        Layout::FramebufferLayout layout;
+        uint8_t rf = VideoCore::g_ctroll3d_complete_callback(0);
+        if (rf) remoteFrame = rf;
+        if(dFrame > 4) {
+            skip = 1;
+            printf("FRAME %d, REMOTE %d     DIFF %d\n", sentFrame, remoteFrame, dFrame);
+        }
+    }
+
+    skipCount += skipRate;
+    if (skipCount < 1.0) {
+        skip = 1;
+    } else {
+        skipCount -= 1.0;
+    }
+
     if (VideoCore::g_ctroll3d_addr && !skip) {
-          skip = 2;
-//          screen_framebuffer.Create();
-          GLuint old_read_fb = state.draw.read_framebuffer;
-          GLuint old_draw_fb = state.draw.draw_framebuffer;
-          state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
-          state.Apply();
+        state.draw.read_framebuffer = state.draw.draw_framebuffer = screen_framebuffer.handle;
+        state.Apply();
 
-          Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
+        Layout::FramebufferLayout layout{VideoCore::g_ctroll3d_framebuffer_layout};
 
-//          GLuint renderbuffer;
-//          glGenRenderbuffers(1, &renderbuffer);
-          glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-          glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
-          glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
                                     renderbuffer);
 #if PBO_SZ >= 2
-          initPBO();
+        initPBO();
 #endif
-          layout.top_screen_enabled = false;
-          layout.bottom_screen.top = layout.top_screen.top = 0;
-          layout.bottom_screen.left = layout.top_screen.left = 0;
-          layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
-          layout.bottom_screen.right = layout.top_screen.right = layout.width;
+        layout.top_screen_enabled = false;
+        layout.bottom_screen.top = layout.top_screen.top = 0;
+        layout.bottom_screen.left = layout.top_screen.left = 0;
+        layout.bottom_screen.bottom = layout.top_screen.bottom = layout.height;
+        layout.bottom_screen.right = layout.top_screen.right = layout.width;
 
 #if PBO_SZ >= 2
-          char *data = readPixelsFromPBO();
-          if (data) {
-              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
-          } else {
-              waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
-          }
+        char *data = readPixelsFromPBO();
+
+        if (data) {
+            uint8_t rf = VideoCore::g_ctroll3d_complete_callback((char *)data);
+            if (rf) remoteFrame = rf;
+            glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        } else {
+            uint8_t rf = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+            if (rf) remoteFrame = rf;
+        }
+        sentFrame++;
 #endif
-          DrawCTroll3DBottomScreen(layout);
+        DrawCTroll3DBottomScreen(layout);
 #if PBO_SZ >= 2
-          unbindPBO();
+//        unbindPBO();
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, GL_NONE);
 #else
-          glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
-                       VideoCore::g_ctroll3d_bits);
-          waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+        glReadPixels(layout.bottom_screen.left, 0, layout.width, layout.height, GL_RGB, GL_UNSIGNED_BYTE,
+                     VideoCore::g_ctroll3d_bits);
+        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
 #endif
-
-//          screen_framebuffer.Release();
-          state.draw.read_framebuffer = old_read_fb;
-          state.draw.draw_framebuffer = old_draw_fb;
-          state.Apply();
-//          glDeleteRenderbuffers(1, &renderbuffer);
     }
 }
 
