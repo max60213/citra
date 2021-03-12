@@ -440,11 +440,12 @@ int socketSend(QTcpSocket& sock, const char *data, int sz) {
     return 1;
 }
 
-int readConfirmation(QTcpSocket& sock) {
+uint8_t readConfirmation(QTcpSocket& sock) {
     sock.waitForReadyRead(0);
     if (sock.bytesAvailable() > 0) {
-        sock.readAll();
-        return 1;
+        char result;
+        int rd = sock.read(&result, 1);
+        if (rd > 0) return result;
     }
 
     return 0;
@@ -560,16 +561,13 @@ int16_t imageDiff(unsigned char *currentImage, int width, int height) {
     return numSqDiff;
 }
 
-int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address) {
+uint8_t GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address) {
     static DECLJPEGOUTBUF(outBuf);
     static unsigned long outSize = 0;
     static DECLJPEGOUTBUF(outDiffBuf);
     static unsigned long outDiffSize = 0;
-    static int sent = 0;
     static int forceFrame = 0;
     static int lastFrameWasFull = 0;
-    static int countConfirmation = 2;
-    static unsigned int confirmationDelayed = 0;
 
     static QTcpSocket sock;
     static unsigned int waitConnection = 0;
@@ -583,23 +581,9 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         else waitConnection--;
     }
 
-    if (sent == countConfirmation) {
-        int confirmed = readConfirmation(sock);
-        if (confirmed) {
-            if (confirmationDelayed) {
-                countConfirmation += confirmationDelayed;
-                if (countConfirmation > 4) countConfirmation = 4;
-                confirmationDelayed = 0;
-            } else if (countConfirmation > 2) {
-                countConfirmation--;
-            }
-            sent = 0;
-        } else {
-            confirmationDelayed += 1;
-            return 1;
-        }
+    if (!frameData) {
+        return readConfirmation(sock);
     }
-    if (!frameData) return 0;
 
     int width = layout.width;
     int height = layout.height;
@@ -616,11 +600,9 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
     if (numSq > (((240 / 8) * (320 / 8)) / 3)) numSq = -1;
     // int16_t numSq = 0;
 
-    char requireConfirmation = (sent == 0);
     if (numSq == 0) {
-        char dataType = 0;
-        sent += socketSend(sock, (const char *)&dataType, 1);
-        socketSend(sock, (const char *)&requireConfirmation, 1);
+        uint16_t dataType = 0;
+        socketSend(sock, (const char *)&dataType, 2);
         forceFrame+=2;
     } else {
 /*
@@ -659,20 +641,18 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         }
 
         if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
-            char dataType = 2;
+            uint16_t dataType = 2;
             uint16_t dataSize = outDiffSize;
-            sent += socketSend(sock, (const char *)&dataType, 1);
-            socketSend(sock, (const char *)&requireConfirmation, 1);
+            socketSend(sock, (const char *)&dataType, 2);
             socketSend(sock, (const char *)&dataSize, 2);
             socketSend(sock, (const char *)diffMap, sizeof(diffMap));
             socketSend(sock, jpgDiffBuf, dataSize);
             forceFrame+=5;
             lastFrameWasFull = 0;
         } else {
-            char dataType = 3+checker;
+            uint16_t dataType = 3+checker;
             uint16_t dataSize = outSize;
-            sent += socketSend(sock, (const char *)&dataType, 1);
-            socketSend(sock, (const char *)&requireConfirmation, 1);
+            socketSend(sock, (const char *)&dataType, 2);
             socketSend(sock, (const char *)&dataSize, 2);
             socketSend(sock, jpgBuf, dataSize);
             if (checker) {
@@ -680,10 +660,9 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
                 lastFrameWasFull = 1;
             }
             checker = (checker+1) & 1;
-            // char dataType = 1;
+            // uint16_t dataType = 1;
             // uint16_t dataSize = outSize;
-            // sent += socketSend(sock, (const char *)&dataType, 1);
-            // socketSend(sock, (const char *)&requireConfirmation, 1);
+            // socketSend(sock, (const char *)&dataType, 1);
             // socketSend(sock, (const char *)&dataSize, 2);
             // socketSend(sock, jpgBuf, dataSize);
             // forceFrame = 0;
@@ -691,24 +670,7 @@ int GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, cha
         }
     }
 
-    if (sent == countConfirmation) {
-        int confirmed = readConfirmation(sock);
-        if (confirmed) {
-            if (confirmationDelayed) {
-                countConfirmation += confirmationDelayed;
-                if (countConfirmation > 4) countConfirmation = 4;
-                confirmationDelayed = 0;
-            } else if (countConfirmation > 2) {
-                countConfirmation--;
-            }
-            sent = 0;
-        } else {
-            confirmationDelayed += 1;
-            return 1;
-        }
-    }
-
-    return 0;
+    return readConfirmation(sock);
 }
 
 void GRenderWindow::ConnectCTroll3D(const QString& address) {
@@ -717,7 +679,7 @@ void GRenderWindow::ConnectCTroll3D(const QString& address) {
 
     VideoCore::RequestCTroll3D(
         screen_image.bits(),
-        [=](char *frameData)->int {
+        [=](char *frameData)->uint8_t {
             return GRenderWindow::processFrameData(layout, frameData, address);
             // static int hasFuture = 0;
             // static std::future<int> future;

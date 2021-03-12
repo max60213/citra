@@ -84,7 +84,7 @@ void RequestScreenshot(void* data, std::function<void()> callback,
     g_renderer_screenshot_requested = true;
 }
 
-void RequestCTroll3D(void* data, std::function<int(char *)> callback,  const char *address,
+void RequestCTroll3D(void* data, std::function<uint8_t(char *)> callback,  const char *address,
                       const Layout::FramebufferLayout& layout) {
 
     g_ctroll3d_bits = data;

@@ -530,6 +530,8 @@ void RendererOpenGL::RenderCTroll3D() {
     int skip = 0;
     static double lastFPS = 30;
     static int frame = -1;
+    static uint8_t sentFrame = 0;
+    static uint8_t remoteFrame = 0;
     static float skipRate = 0.2;
     static float skipCount = 0;
     static struct timeval lastTime;
@@ -559,11 +561,14 @@ void RendererOpenGL::RenderCTroll3D() {
     }
     frame++;
 
-    if (waitingConfirmation) {
+    int dFrame = (sentFrame >= remoteFrame) ? sentFrame-remoteFrame : sentFrame+256-remoteFrame;
+    if (dFrame > 4) {
         Layout::FramebufferLayout layout;
-        waitingConfirmation = VideoCore::g_ctroll3d_complete_callback(0);
-        if (waitingConfirmation) {
+        uint8_t rf = VideoCore::g_ctroll3d_complete_callback(0);
+        if (rf) remoteFrame = rf;
+        if(dFrame > 4) {
             skip = 1;
+            printf("FRAME %d, REMOTE %d     DIFF %d\n", sentFrame, remoteFrame, dFrame);
         }
     }
 
@@ -597,11 +602,14 @@ void RendererOpenGL::RenderCTroll3D() {
         char *data = readPixelsFromPBO();
 
         if (data) {
-            waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)data);
+            uint8_t rf = VideoCore::g_ctroll3d_complete_callback((char *)data);
+            if (rf) remoteFrame = rf;
             glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
         } else {
-            waitingConfirmation = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+            uint8_t rf = VideoCore::g_ctroll3d_complete_callback((char *)VideoCore::g_ctroll3d_bits);
+            if (rf) remoteFrame = rf;
         }
+        sentFrame++;
 #endif
         DrawCTroll3DBottomScreen(layout);
 #if PBO_SZ >= 2

@@ -212,7 +212,7 @@ private:
 
     void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 
-    static int processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address);
+    static uint8_t processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address);
 
     std::unique_ptr<GraphicsContext> core_context;
 
