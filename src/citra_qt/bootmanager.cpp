@@ -505,7 +505,7 @@ int copySquare(unsigned char *dst, unsigned char *src, int rowStride) {
 }
 
 
-unsigned char diffBuf[240*320*3];
+unsigned char diffBuf[240 * 320 * 3];
 unsigned char diffMap[((240 / 8) * (320 / 8)) / 8];
 int putSquare(unsigned char *dst, unsigned char *src, int rowStride) {
     for (int i=0; i<8; i++) {
@@ -529,45 +529,46 @@ int16_t imageDiff(unsigned char *currentImage, int width, int height) {
     int mapPos = 0;
     int mapMask = 0x01;
 
-    if (lastImage == 0) {
-        lastImage = (unsigned char *) malloc(rowStride * height);
-        memcpy(lastImage, currentImage, rowStride * height);
-        return -1;
-    } else {
-        unsigned char *lPtr = lastImage;
-        unsigned char *cPtr = currentImage;
+    unsigned char *lPtr = lastImage;
+    unsigned char *cPtr = currentImage;
 
-        for (int i=0; i<height; i+=8) {
-            for (int j=0; j<width; j+=8) {
-                int sDiff = squareDiff(lPtr, cPtr, rowStride);
-                if (sDiff) {
-                    diffMap[mapPos] |= mapMask;
-                    copySquare(lPtr, cPtr, rowStride);
-                    putSquare(diffBuf + 8 * 8 * 3 * numSqDiff, cPtr, rowStride);
-                    ++numSqDiff;
-                } else {
-                    diffMap[mapPos] &= ~mapMask;
-                }
-                if (mapMask == 0x80) {mapMask = 0x01; mapPos++;}
-                else mapMask <<= 1;
-                lPtr += 8 * 3;
-                cPtr += 8 * 3;
+    for (int i=0; i<height; i+=8) {
+        for (int j=0; j<width; j+=8) {
+            int sDiff = squareDiff(lPtr, cPtr, rowStride);
+            if (sDiff) {
+                diffMap[mapPos] |= mapMask;
+                copySquare(lPtr, cPtr, rowStride);
+                putSquare(diffBuf + 8 * 8 * 3 * numSqDiff, cPtr, rowStride);
+                ++numSqDiff;
+            } else {
+                diffMap[mapPos] &= ~mapMask;
             }
-            lPtr += (8 * rowStride) - rowStride;
-            cPtr += (8 * rowStride) - rowStride;
+            if (mapMask == 0x80) {mapMask = 0x01; mapPos++;}
+            else mapMask <<= 1;
+            lPtr += 8 * 3;
+            cPtr += 8 * 3;
         }
+        lPtr += (8 * rowStride) - rowStride;
+        cPtr += (8 * rowStride) - rowStride;
     }
 
     return numSqDiff;
 }
+
+#define FM_NONE 0
+#define FM_FULL 1
+#define FM_DIFF 2
+#define FM_CHECKER 3
+#define FM_CHECKER_COMPL 4
 
 uint8_t GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout, char *frameData, const QString& address) {
     static DECLJPEGOUTBUF(outBuf);
     static unsigned long outSize = 0;
     static DECLJPEGOUTBUF(outDiffBuf);
     static unsigned long outDiffSize = 0;
-    static int forceFrame = 0;
-    static int lastFrameWasFull = 0;
+    static int forceFrameCount = 0;
+    static int checker = 0;
+    static uint16_t lastFrameMode = FM_NONE;
 
     static QTcpSocket sock;
     static unsigned int waitConnection = 0;
@@ -588,32 +589,44 @@ uint8_t GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout,
     int width = layout.width;
     int height = layout.height;
 
-    static int checker = 0;
+    uint16_t frameMode = FM_NONE;
+    if (forceFrameCount > 100) frameMode = FM_FULL;
+    else if (lastFrameMode == FM_CHECKER) frameMode = FM_CHECKER_COMPL;
 
     int16_t numSq = 0;
-    if (lastFrameWasFull) forceFrame = 0;
-    else if (forceFrame > 100) numSq = -1;
+    if (!lastImage) {
+        lastImage = (unsigned char *) malloc(width * height * 3);
+        memcpy(lastImage, frameData, width * height * 3);
+        frameMode = FM_FULL;
+    } else if ((frameMode != FM_FULL) && (frameMode != FM_CHECKER_COMPL)) {
+        numSq = imageDiff((unsigned char *)frameData, width, height);
+        if (numSq > (((240 / 8) * (320 / 8)) / 3)) frameMode = FM_CHECKER;
+        else if (numSq > 0) frameMode = FM_DIFF;
+        else frameMode = FM_NONE;
+    }
+    lastFrameMode = frameMode;
 
-    if(checker) numSq = -1;
-    if (numSq != -1) numSq = imageDiff((unsigned char *)frameData, width, height);
-    //More than half of the screen? Just send the full frame
-    if (numSq > (((240 / 8) * (320 / 8)) / 3)) numSq = -1;
-    // int16_t numSq = 0;
-
-    if (numSq == 0) {
-        uint16_t dataType = 0;
-        socketSend(sock, (const char *)&dataType, 2);
-        forceFrame+=2;
-    } else {
-/*
-        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 40 + (rand()%20), &outBuf, &outSize);
-        const char *jpgDiffBuf = 0;
-
-        if (numSq > 0) {
-            jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 50 + (rand()%20), &outDiffBuf, &outDiffSize);
-        }
-*/
-        char buf[320 * 240 * 3 / 2];
+    if (frameMode == FM_NONE) {
+        socketSend(sock, (const char *)&frameMode, 2);
+        forceFrameCount+=1;
+    }
+    if (frameMode == FM_FULL) {
+        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 70, &outBuf, &outSize);
+        uint16_t dataSize = outSize;
+        socketSend(sock, (const char *)&frameMode, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, jpgBuf, dataSize);
+        forceFrameCount = 0;
+    } else if (frameMode == FM_DIFF) {
+        const char *jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 70, &outDiffBuf, &outDiffSize);
+        uint16_t dataSize = outDiffSize;
+        socketSend(sock, (const char *)&frameMode, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, (const char *)diffMap, sizeof(diffMap));
+        socketSend(sock, jpgDiffBuf, dataSize);
+        forceFrameCount += 5;
+    } else if ((frameMode == FM_CHECKER) || (frameMode == FM_CHECKER_COMPL)) {
+        char buf[width * height * 3 / 2];
         char *in = frameData;
         char *out = buf;
 
@@ -633,41 +646,13 @@ uint8_t GRenderWindow::processFrameData(const Layout::FramebufferLayout& layout,
         }
         const char *jpgBuf = jpegCompress((unsigned char *)buf, width/2, height, 70, &outBuf, &outSize);
 
-//        const char *jpgBuf = jpegCompress((unsigned char *)frameData, width, height, 75, &outBuf, &outSize);
-        const char *jpgDiffBuf = 0;
-
-        if (numSq > 0) {
-            jpgDiffBuf = jpegCompress((unsigned char *) diffBuf, 8, 8 * numSq, 70, &outDiffBuf, &outDiffSize);
-        }
-
-        if ((numSq > 0) && ((outDiffSize + sizeof(diffMap)) < outSize)) {
-            uint16_t dataType = 2;
-            uint16_t dataSize = outDiffSize;
-            socketSend(sock, (const char *)&dataType, 2);
-            socketSend(sock, (const char *)&dataSize, 2);
-            socketSend(sock, (const char *)diffMap, sizeof(diffMap));
-            socketSend(sock, jpgDiffBuf, dataSize);
-            forceFrame+=5;
-            lastFrameWasFull = 0;
-        } else {
-            uint16_t dataType = 3+checker;
-            uint16_t dataSize = outSize;
-            socketSend(sock, (const char *)&dataType, 2);
-            socketSend(sock, (const char *)&dataSize, 2);
-            socketSend(sock, jpgBuf, dataSize);
-            if (checker) {
-                forceFrame = 0;
-                lastFrameWasFull = 1;
-            }
-            checker = (checker+1) & 1;
-            // uint16_t dataType = 1;
-            // uint16_t dataSize = outSize;
-            // socketSend(sock, (const char *)&dataType, 1);
-            // socketSend(sock, (const char *)&dataSize, 2);
-            // socketSend(sock, jpgBuf, dataSize);
-            // forceFrame = 0;
-            // lastFrameWasFull = 1;
-        }
+        uint16_t dataType = 3+checker;
+        uint16_t dataSize = outSize;
+        socketSend(sock, (const char *)&dataType, 2);
+        socketSend(sock, (const char *)&dataSize, 2);
+        socketSend(sock, jpgBuf, dataSize);
+        checker = (checker+1) & 1;
+        forceFrameCount+=3;
     }
 
     return readConfirmation(sock);
