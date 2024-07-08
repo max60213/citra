@@ -12,7 +12,7 @@
     url = https://github.com/philsquared/Catch.git
 [submodule "dynarmic"]
     path = externals/dynarmic
-    url = https://github.com/blitzingeagle/dynarmic.git
+    url = git@github.com:blitzingeagle/dynarmic.git
 [submodule "xbyak"]
     path = externals/xbyak
     url = https://github.com/herumi/xbyak.git
@@ -30,7 +30,7 @@
     url = https://github.com/benhoyt/inih.git
 [submodule "libressl"]
     path = externals/libressl
-    url = https://github.com/blitzingeagle/ext-libressl-portable.git
+    url = git@github.com:blitzingeagle/ext-libressl-portable.git
 [submodule "cubeb"]
     path = externals/cubeb
     url = https://github.com/kinetiknz/cubeb.git
